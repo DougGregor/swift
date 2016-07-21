@@ -846,6 +846,8 @@ swift::decomposeArgType(Type type, ArrayRef<Identifier> argumentLabels) {
   case TypeKind::Paren: {
     CallArgParam argParam;
     argParam.Ty = cast<ParenType>(type.getPointer())->getUnderlyingType();
+    assert(argumentLabels.size() == 1);
+    argParam.Label = argumentLabels[0];
     result.push_back(argParam);
     return result;
   }
@@ -896,9 +898,14 @@ swift::decomposeParamType(Type type, const ValueDecl *paramOwner,
 
       CallArgParam argParam;
       argParam.Ty = elt.isVararg() ? elt.getVarargBaseTy() : elt.getType();
-      argParam.Label = elt.getName();
-      argParam.HasDefaultArgument =
-          paramList && paramList->get(i)->isDefaultArgument();
+      if (paramList) {
+        auto param = paramList->get(i);
+        argParam.Label = param->getArgumentName();
+        argParam.HasDefaultArgument = param->isDefaultArgument();
+      } else {
+        argParam.Label = elt.getName();
+      }
+
       argParam.Variadic = elt.isVararg();
       result.push_back(argParam);
     }
@@ -908,8 +915,11 @@ swift::decomposeParamType(Type type, const ValueDecl *paramOwner,
   case TypeKind::Paren: {
     CallArgParam argParam;
     argParam.Ty = cast<ParenType>(type.getPointer())->getUnderlyingType();
-    argParam.HasDefaultArgument =
-        paramList && paramList->get(0)->isDefaultArgument();
+    if (paramList) {
+      auto param = paramList->get(0);
+      argParam.Label = param->getArgumentName();
+      argParam.HasDefaultArgument = param->isDefaultArgument();
+    }
     result.push_back(argParam);
     break;
   }
@@ -917,6 +927,11 @@ swift::decomposeParamType(Type type, const ValueDecl *paramOwner,
   default: {
     CallArgParam argParam;
     argParam.Ty = type;
+    if (paramList) {
+      auto param = paramList->get(0);
+      argParam.Label = param->getArgumentName();
+      argParam.HasDefaultArgument = param->isDefaultArgument();
+    }
     result.push_back(argParam);
     break;
   }
@@ -1143,6 +1158,39 @@ void ProtocolType::canonicalizeProtocols(
   llvm::array_pod_sort(protocols.begin(), protocols.end(), compareProtocols);
 }
 
+/// Retrieve the a version of this type without the outermost levels.
+///
+/// This operation is part of the canonicalization of function types.
+static Type getWithoutOutermostLabels(Type type) {
+  auto tupleTy = dyn_cast<TupleType>(type.getPointer());
+  if (!tupleTy) return type;
+
+  SmallVector<TupleTypeElt, 4> elements;
+  bool anyChanged = false;
+  for (unsigned i : range(tupleTy->getNumElements())) {
+    const auto &elt = tupleTy->getElement(i);
+    if (elt.hasName()) {
+      // If this is the first element that changec, copy all previous elements.
+      if (!anyChanged) {
+        anyChanged = true;
+        elements.reserve(tupleTy->getNumElements());
+        elements.append(tupleTy->getElements().begin(),
+                        tupleTy->getElements().begin() + i);
+      }
+
+      elements.push_back(elt.getWithName(Identifier()));
+      continue;
+    }
+
+    if (anyChanged)
+      elements.push_back(elt);
+  }
+
+  if (!anyChanged) return type;
+  return TupleType::get(elements, type->getASTContext());
+}
+
+
 /// getCanonicalType - Return the canonical version of this type, which has
 /// sugar from all levels stripped off.
 CanType TypeBase::getCanonicalType() {
@@ -1238,7 +1286,7 @@ CanType TypeBase::getCanonicalType() {
     break;
   case TypeKind::PolymorphicFunction: {
     PolymorphicFunctionType *FT = cast<PolymorphicFunctionType>(this);
-    Type In = FT->getInput()->getCanonicalType();
+    Type In = getWithoutOutermostLabels(FT->getInput()->getCanonicalType());
     Type Out = FT->getResult()->getCanonicalType();
     Result = PolymorphicFunctionType::get(In, Out, &FT->getGenericParams(),
                                           FT->getExtInfo());
@@ -1254,7 +1302,9 @@ CanType TypeBase::getCanonicalType() {
     // Transform the input and result types.
     auto &ctx = function->getInput()->getASTContext();
     auto &mod = *ctx.TheBuiltinModule;
-    auto inputTy = sig->getCanonicalTypeInContext(function->getInput(), mod);
+    auto inputTy =
+      sig->getCanonicalTypeInContext(
+        getWithoutOutermostLabels(function->getInput()), mod);
     auto resultTy = sig->getCanonicalTypeInContext(function->getResult(), mod);
 
     Result = GenericFunctionType::get(sig, inputTy, resultTy,
@@ -1270,7 +1320,7 @@ CanType TypeBase::getCanonicalType() {
 
   case TypeKind::Function: {
     FunctionType *FT = cast<FunctionType>(this);
-    Type In = FT->getInput()->getCanonicalType();
+    Type In = getWithoutOutermostLabels(FT->getInput()->getCanonicalType());
     Type Out = FT->getResult()->getCanonicalType();
     Result = FunctionType::get(In, Out, FT->getExtInfo());
     break;

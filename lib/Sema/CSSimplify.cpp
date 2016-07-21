@@ -590,7 +590,6 @@ static ConstraintSystem::SolutionKind
 matchCallArguments(ConstraintSystem &cs, TypeMatchKind kind,
                    Type argType, Type paramType,
                    ConstraintLocatorBuilder locator) {
-  
   // In the empty existential parameter case, we don't need to decompose the
   // arguments.
   if (paramType->isEmptyExistentialComposition()) {
@@ -2558,10 +2557,11 @@ ConstraintSystem::simplifyOptionalObjectConstraint(const Constraint &constraint)
   return SolutionKind::Solved;
 }
 
-/// Retrieve the argument labels that are provided for a member
-/// reference at the given locator.
-static Optional<ConstraintSystem::ArgumentLabelState>
-getArgumentLabels(ConstraintSystem &cs, ConstraintLocatorBuilder locator) {
+/// Retrieve the locator that represents the argument labels for the
+/// given locator, to be used when attempting to extract argument
+/// labels.
+static Optional<ConstraintLocator *> getArgumentLabelLocator(
+    ConstraintSystem &cs, ConstraintLocatorBuilder locator) {
   SmallVector<LocatorPathElt, 2> parts;
   Expr *anchor = locator.getLocatorParts(parts);
   if (!anchor)
@@ -2600,11 +2600,20 @@ getArgumentLabels(ConstraintSystem &cs, ConstraintLocatorBuilder locator) {
   if (!parts.empty())
     return None;
 
-  auto known = cs.ArgumentLabels.find(cs.getConstraintLocator(anchor));
-  if (known == cs.ArgumentLabels.end())
-    return None;
+  return cs.getConstraintLocator(anchor);
+}
 
-  return known->second;
+/// Retrieve the argument labels that are provided for a member
+/// reference at the given locator.
+static Optional<ConstraintSystem::ArgumentLabelState>
+getArgumentLabels(ConstraintSystem &cs, ConstraintLocatorBuilder locator) {
+  if (auto argLabelLocator = getArgumentLabelLocator(cs, locator)) {
+    auto known = cs.ArgumentLabels.find(*argLabelLocator);
+    if (known != cs.ArgumentLabels.end())
+      return known->second;
+  }
+
+  return None;
 }
 
 /// Given a ValueMember, UnresolvedValueMember, or TypeMember constraint,

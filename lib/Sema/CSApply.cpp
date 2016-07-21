@@ -2130,7 +2130,8 @@ namespace {
             { segment },
             { tc.Context.Id_stringInterpolationSegment });
 
-        auto converted = finishApply(apply, openedType, locatorBuilder);
+        auto converted = finishApply(apply, openedType,
+                                     cs.getConstraintLocator(apply));
         if (!converted)
           return nullptr;
 
@@ -2146,7 +2147,8 @@ namespace {
       // Call the init(stringInterpolation:) initializer with the arguments.
       ApplyExpr *apply = CallExpr::createImplicit(tc.Context, memberRef,
                                                   segments, names);
-      expr->setSemanticExpr(finishApply(apply, openedType, locatorBuilder));
+      expr->setSemanticExpr(finishApply(apply, openedType,
+                                        cs.getConstraintLocator(apply)));
       return expr;
     }
     
@@ -2665,8 +2667,7 @@ namespace {
       bool first = true;
       for (auto elt : expr->getElements()) {
         if (first) {
-          typeElements.push_back(TupleTypeElt(elt->getType(),
-                                              tc.Context.Id_arrayLiteral));
+          typeElements.push_back(TupleTypeElt(elt->getType()));
           names.push_back(tc.Context.Id_arrayLiteral);
 
           first = false;
@@ -2731,8 +2732,7 @@ namespace {
       bool first = true;
       for (auto elt : expr->getElements()) {
         if (first) {
-          typeElements.push_back(TupleTypeElt(elt->getType(),
-                                              tc.Context.Id_dictionaryLiteral));
+          typeElements.push_back(TupleTypeElt(elt->getType()));
           names.push_back(tc.Context.Id_dictionaryLiteral);
 
           first = false;
@@ -4748,16 +4748,6 @@ Expr *ExprRewriter::coerceCallArguments(
     return arg;
   };
 
-  // Local function to extract the ith argument label, which papers over some
-  // of the weirdness with tuples vs. parentheses.
-  auto getArgLabel = [&](unsigned i) -> Identifier {
-    if (argTuple)
-      return argTuple->getElementName(i);
-
-    assert(i == 0 && "Scalar only has a single argument");
-    return Identifier();
-  };
-
   // Local function to produce a locator to refer to the ith element of the
   // argument tuple.
   auto getArgLocator = [&](unsigned argIdx, unsigned paramIdx)
@@ -4791,7 +4781,7 @@ Expr *ExprRewriter::coerceCallArguments(
       auto paramBaseType = param.Ty;
       assert(sliceType.isNull() && "Multiple variadic parameters?");
       sliceType = tc.getArraySliceType(arg->getLoc(), paramBaseType);
-      toSugarFields.push_back(TupleTypeElt(sliceType, param.Label, true));
+      toSugarFields.push_back(TupleTypeElt(sliceType, Identifier(), true));
       anythingShuffled = true;
       sources.push_back(TupleShuffleExpr::Variadic);
 
@@ -4803,8 +4793,7 @@ Expr *ExprRewriter::coerceCallArguments(
 
         // If the argument type exactly matches, this just works.
         if (argType->isEqual(paramBaseType)) {
-          fromTupleExprFields[argIdx] = TupleTypeElt(argType,
-                                                     getArgLabel(argIdx));
+          fromTupleExprFields[argIdx] = TupleTypeElt(argType);
           fromTupleExpr[argIdx] = arg;
           continue;
         }
@@ -4817,8 +4806,7 @@ Expr *ExprRewriter::coerceCallArguments(
 
         // Add the converted argument.
         fromTupleExpr[argIdx] = convertedArg;
-        fromTupleExprFields[argIdx] = TupleTypeElt(convertedArg->getType(),
-                                                   getArgLabel(argIdx));
+        fromTupleExprFields[argIdx] = TupleTypeElt(convertedArg->getType());
       }
 
       continue;
@@ -4839,7 +4827,7 @@ Expr *ExprRewriter::coerceCallArguments(
                                   ? tc.getArraySliceType(arg->getLoc(),
                                                          param.Ty)
                                   : param.Ty,
-                                param.Label,
+                                Identifier(),
                                 param.Variadic));
 
       if (defArg) {
@@ -4857,18 +4845,17 @@ Expr *ExprRewriter::coerceCallArguments(
     auto arg = getArg(argIdx);
     auto argType = arg->getType();
 
-    // If the argument and parameter indices differ, or if the names differ,
-    // this is a shuffle.
+    // If the argument and parameter indices differ, this is a shuffle.
     sources.push_back(argIdx);
-    if (argIdx != paramIdx || getArgLabel(argIdx) != param.Label) {
+    if (argIdx != paramIdx) {
       anythingShuffled = true;
     }
 
     // If the types exactly match, this is easy.
     auto paramType = param.Ty;
     if (argType->isEqual(paramType)) {
-      toSugarFields.push_back(TupleTypeElt(argType, param.Label));
-      fromTupleExprFields[argIdx] = TupleTypeElt(paramType, param.Label);
+      toSugarFields.push_back(TupleTypeElt(argType));
+      fromTupleExprFields[argIdx] = TupleTypeElt(paramType);
       fromTupleExpr[argIdx] = arg;
       continue;
     }
@@ -4881,9 +4868,8 @@ Expr *ExprRewriter::coerceCallArguments(
 
     // Add the converted argument.
     fromTupleExpr[argIdx] = convertedArg;
-    fromTupleExprFields[argIdx] = TupleTypeElt(convertedArg->getType(),
-                                               getArgLabel(argIdx));
-    toSugarFields.push_back(TupleTypeElt(argType, param.Label));
+    fromTupleExprFields[argIdx] = TupleTypeElt(convertedArg->getType());
+    toSugarFields.push_back(TupleTypeElt(argType));
   }
 
   // Compute a new 'arg', from the bits we have.  We have three cases: the

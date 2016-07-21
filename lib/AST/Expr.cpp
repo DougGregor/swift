@@ -1008,8 +1008,12 @@ StringLiteralExpr::StringLiteralExpr(StringRef Val, SourceRange Range,
       unicode::isSingleExtendedGraphemeCluster(Val);
 }
 
+/// Retrieve the argument labels, label locations, and 'has trailing closure'
+/// indicator from the given argument, stripping that information out of the
+/// argument itself.
 static ArrayRef<Identifier>
-getArgumentLabelsFromArgument(Expr *arg, SmallVectorImpl<Identifier> &scratch,
+getArgumentLabelsFromArgument(ASTContext &ctx,
+                              Expr *&arg, SmallVectorImpl<Identifier> &scratch,
                               SmallVectorImpl<SourceLoc> *sourceLocs = nullptr,
                               bool *hasTrailingClosure = nullptr){
   if (sourceLocs) sourceLocs->clear();
@@ -1034,6 +1038,22 @@ getArgumentLabelsFromArgument(Expr *arg, SmallVectorImpl<Identifier> &scratch,
 
     if (tuple->hasElementNames()) {
       assert(tuple->getElementNames().size() == tuple->getNumElements());
+
+      // Form a new tuple that drops the element names.
+      if (tuple->getNumElements() == 1) {
+        arg = new (ctx) ParenExpr(tuple->getStartLoc(),
+                                  tuple->getElement(0),
+                                  tuple->getEndLoc(),
+                                  /*hasTrailingClosure=*/false);
+      } else {
+        arg = TupleExpr::create(ctx, tuple->getStartLoc(),
+                                tuple->getElements(),
+                                { }, { },
+                                tuple->getEndLoc(),
+                                /*hasTrailingClosure=*/false,
+                                /*implicit=*/arg->isImplicit());
+      }
+                                   
       return tuple->getElementNames();
     }
 
@@ -1085,7 +1105,7 @@ static void computeSingleArgumentType(ASTContext &ctx, Expr *arg,
     auto type = tuple->getElement(i)->getType();
     if (!type) return;
 
-    typeElements.push_back(TupleTypeElt(type, tuple->getElementName(i)));
+    typeElements.push_back(TupleTypeElt(type));
   }
   arg->setType(TupleType::get(typeElements, ctx));
 }
@@ -1115,12 +1135,13 @@ static Expr *packSingleArgument(
 
   // Construct a TupleExpr or ParenExpr, as appropriate, for the argument.
   if (!trailingClosure) {
-    // Do we have a single, unlabeled argument?
-    if (args.size() == 1 && (argLabels.empty() || argLabels[0].empty())) {
+    // Do we have a single argument?
+    if (args.size() == 1) {
       auto arg = new (ctx) ParenExpr(lParenLoc, args[0], rParenLoc,
                                      /*hasTrailingClosure=*/false);
       computeSingleArgumentType(ctx, arg, implicit);
-      argLabelsScratch.push_back(Identifier());
+      argLabelsScratch.push_back(argLabels.empty() ? Identifier()
+                                                   : argLabels[0]);
       argLabels = argLabelsScratch;
       argLabelLocs = { };
       return arg;
@@ -1133,12 +1154,7 @@ static Expr *packSingleArgument(
     }
 
     // Construct the argument tuple.
-    if (argLabels.empty() && !args.empty()) {
-      argLabelsScratch.assign(args.size(), Identifier());
-      argLabels = argLabelsScratch;
-    }
-      
-    auto arg = TupleExpr::create(ctx, lParenLoc, args, argLabels, argLabelLocs,
+    auto arg = TupleExpr::create(ctx, lParenLoc, args, { }, { },
                                  rParenLoc, /*hasTrailingClosure=*/false,
                                  /*implicit=*/false);
     computeSingleArgumentType(ctx, arg, implicit);
@@ -1182,12 +1198,10 @@ static Expr *packSingleArgument(
     argLabelLocs = argLabelLocsScratch;
   }
 
-  auto arg = TupleExpr::create(ctx, lParenLoc, args, argLabels,
-                               argLabelLocs, rParenLoc,
+  auto arg = TupleExpr::create(ctx, lParenLoc, argsScratch, { }, { }, rParenLoc,
                                /*hasTrailingClosure=*/true,
                                /*implicit=*/false);
   computeSingleArgumentType(ctx, arg, implicit);
-
   return arg;
 }
 
@@ -1217,7 +1231,7 @@ ObjectLiteralExpr *ObjectLiteralExpr::create(ASTContext &ctx,
   SmallVector<Identifier, 4> argLabelsScratch;
   SmallVector<SourceLoc, 4> argLabelLocs;
   bool hasTrailingClosure = false;
-  auto argLabels = getArgumentLabelsFromArgument(arg, argLabelsScratch,
+  auto argLabels = getArgumentLabelsFromArgument(ctx, arg, argLabelsScratch,
                                                  &argLabelLocs,
                                                  &hasTrailingClosure);
 
@@ -1463,7 +1477,7 @@ SubscriptExpr *SubscriptExpr::create(ASTContext &ctx, Expr *base, Expr *index,
   SmallVector<Identifier, 4> argLabelsScratch;
   SmallVector<SourceLoc, 4> argLabelLocs;
   bool hasTrailingClosure = false;
-  auto argLabels = getArgumentLabelsFromArgument(index, argLabelsScratch,
+  auto argLabels = getArgumentLabelsFromArgument(ctx, index, argLabelsScratch,
                                                  &argLabelLocs,
                                                  &hasTrailingClosure);
 
@@ -1526,7 +1540,7 @@ DynamicSubscriptExpr::create(ASTContext &ctx, Expr *base, Expr *index,
   SmallVector<Identifier, 4> argLabelsScratch;
   SmallVector<SourceLoc, 4> argLabelLocs;
   bool hasTrailingClosure = false;
-  auto argLabels = getArgumentLabelsFromArgument(index, argLabelsScratch,
+  auto argLabels = getArgumentLabelsFromArgument(ctx, index, argLabelsScratch,
                                                  &argLabelLocs,
                                                  &hasTrailingClosure);
 
@@ -1676,10 +1690,13 @@ CallExpr *CallExpr::create(ASTContext &ctx, Expr *fn, Expr *arg,
   if (argLabels.empty()) {
     // Inspect the argument to dig out the argument labels, their location, and
     // whether there is a trailing closure.
-    argLabels = getArgumentLabelsFromArgument(arg, argLabelsScratch,
+    argLabels = getArgumentLabelsFromArgument(ctx, arg, argLabelsScratch,
                                               &argLabelLocsScratch,
                                               &hasTrailingClosure);
     argLabelLocs = argLabelLocsScratch;
+  } else {
+    // Use getArgumentLabelsFromArgument() to strip argument labels.
+    (void)getArgumentLabelsFromArgument(ctx, arg, argLabelsScratch);
   }
 
   size_t size = totalSizeToAlloc(argLabels, argLabelLocs, hasTrailingClosure);

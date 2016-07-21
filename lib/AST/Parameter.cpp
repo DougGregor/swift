@@ -123,7 +123,7 @@ Type ParameterList::getType(const ASTContext &C) const {
     if (!P->hasType()) return Type();
     
     argumentInfo.push_back({
-      P->getType(), P->getArgumentName(),
+      P->getType(), Identifier(),
       P->isVariadic()
     });
   }
@@ -154,7 +154,7 @@ Type ParameterList::getInterfaceType(DeclContext *DC) const {
     assert(!type->hasArchetype());
 
     argumentInfo.push_back({
-      type, P->getArgumentName(),
+      type, Identifier(),
       P->isVariadic()
     });
   }

@@ -2350,7 +2350,12 @@ Type TypeResolver::resolveTupleType(TupleTypeRepr *repr,
       Type ty = resolveType(namedTyR->getTypeRepr(), elementOptions);
       if (!ty || ty->is<ErrorType>()) return ty;
 
-      elements.push_back(TupleTypeElt(ty, namedTyR->getName()));
+      // Note: when the tuple type is for a function input, names are not part
+      // of the resulting function type.
+      if (options & TR_ImmediateFunctionInput)
+        elements.push_back(TupleTypeElt(ty));
+      else
+        elements.push_back(TupleTypeElt(ty, namedTyR->getName()));
     } else {
       Type ty = resolveType(tyR, elementOptions);
       if (!ty || ty->is<ErrorType>()) return ty;
