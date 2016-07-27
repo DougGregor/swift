@@ -1159,8 +1159,12 @@ ConstraintSystem::matchTypes(Type type1, Type type2, TypeMatchKind kind,
   auto desugar2 = type2->getDesugaredType();
 
   // If the types are obviously equivalent, we're done.
-  if (kind != TypeMatchKind::ConformsTo && desugar1->isEqual(desugar2))
-    return SolutionKind::Solved;
+  if (kind != TypeMatchKind::ConformsTo && desugar1->isEqual(desugar2)) {
+    if (isArgumentTupleConversion) {
+      fprintf(stderr, "FIXME: weird case...\n");
+    } else 
+      return SolutionKind::Solved;
+  }
 
   // If either (or both) types are type variables, unify the type variables.
   if (typeVar1 || typeVar2) {

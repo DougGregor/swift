@@ -1286,7 +1286,8 @@ CanType TypeBase::getCanonicalType() {
     break;
   case TypeKind::PolymorphicFunction: {
     PolymorphicFunctionType *FT = cast<PolymorphicFunctionType>(this);
-    Type In = getWithoutOutermostLabels(FT->getInput()->getCanonicalType());
+    Type In = getWithoutOutermostLabels(FT->getInput()->getCanonicalType())
+                ->getCanonicalType();
     Type Out = FT->getResult()->getCanonicalType();
     Result = PolymorphicFunctionType::get(In, Out, &FT->getGenericParams(),
                                           FT->getExtInfo());
@@ -1320,7 +1321,8 @@ CanType TypeBase::getCanonicalType() {
 
   case TypeKind::Function: {
     FunctionType *FT = cast<FunctionType>(this);
-    Type In = getWithoutOutermostLabels(FT->getInput()->getCanonicalType());
+    Type In = getWithoutOutermostLabels(FT->getInput()->getCanonicalType())
+                ->getCanonicalType();
     Type Out = FT->getResult()->getCanonicalType();
     Result = FunctionType::get(In, Out, FT->getExtInfo());
     break;
