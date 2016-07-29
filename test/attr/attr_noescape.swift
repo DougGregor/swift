@@ -199,7 +199,7 @@ struct S : P2 {
 
 
 // rdar://19763676 - False positive in @noescape analysis triggered by parameter label
-func r19763676Callee(_ f: @noescape (param: Int) -> Int) {}
+func r19763676Callee(_ f: @noescape (_ param: Int) -> Int) {}
 
 func r19763676Caller(_ g: @noescape (Int) -> Int) {
   r19763676Callee({ _ in g(1) })
@@ -259,10 +259,10 @@ func escapeNoEscapeResult(_ x: [Int]) -> (@noescape (Int) -> Int) -> Int {
 
 // SR-824 - @noescape for Type Aliased Closures
 //
-typealias CompletionHandlerNE = @noescape (success: Bool) -> ()
-typealias CompletionHandler = (success: Bool) -> ()
+typealias CompletionHandlerNE = @noescape (_ success: Bool) -> ()
+typealias CompletionHandler = (_ success: Bool) -> ()
 var escape : CompletionHandlerNE
-func doThing1(_ completion: @noescape (success: Bool) -> ()) {
+func doThing1(_ completion: @noescape (_ success: Bool) -> ()) {
   // expected-error @+2 {{@noescape value 'escape' may only be called}}
   // expected-error @+1 {{@noescape parameter 'completion' may only be called}}
   escape = completion // expected-error {{declaration closing over @noescape parameter 'escape' may allow it to escape}}

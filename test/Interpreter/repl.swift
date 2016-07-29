@@ -199,9 +199,9 @@ var _ : ((Int) -> Int)? = .none
 // CHECK: : ((Int) -> Int)?
 func chained(f f: (Int) -> ()) -> Int { return 0 }
 chained
-// CHECK: : (f: (Int) -> ()) -> Int
+// CHECK: : ((Int) -> ()) -> Int
 [chained]
-// CHECK: : [(f: (Int) -> ()) -> Int]
+// CHECK: : [((Int) -> ()) -> Int]
 
 ({97210}())
 // CHECK: = 97210

@@ -91,13 +91,13 @@ print(test_compose_closure(20)) // CHECK-NEXT: 21
 
 // rdar://problem/18988428
 
-func clamp<T: Comparable>(_ minValue: T, _ maxValue: T) -> (n: T) -> T {
+func clamp<T: Comparable>(_ minValue: T, _ maxValue: T) -> (_ n: T) -> T {
     return { n in max(minValue, min(n, maxValue)) }
 }
 
 let clampFoo2 = clamp(10.0, 30.0)
 
-print(clampFoo2(n: 3.0)) // CHECK-NEXT: 10.0
+print(clampFoo2(3.0)) // CHECK-NEXT: 10.0
 
 // rdar://problem/19195470
 
@@ -105,11 +105,11 @@ func pair<T,U> (_ a: T) -> (U) -> (T,U) {
 	return { b in (a,b)	}
 }
 
-func pair_<T,U> (_ a: T) -> (b: U) -> (T,U) {
+func pair_<T,U> (_ a: T) -> (_ b: U) -> (T,U) {
 	return { b in (a,b) }
 }
 
-infix operator <+> { }
+infix operator <+>
 func <+><T,U,V> (lhs: T?, rhs: (T) -> (U) -> V) -> (U) -> V? {
 	if let x = lhs {
 		return { y in .some(rhs(x)(y)) }
