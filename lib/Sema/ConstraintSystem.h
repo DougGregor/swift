@@ -1393,14 +1393,11 @@ public:
     addConstraint(c);
   }
 
+  /// Add a new constraint with a restriction on its application.
   void addRestrictedConstraint(ConstraintKind kind,
                                ConversionRestrictionKind restriction,
                                Type first, Type second,
-                               ConstraintLocatorBuilder locator) {
-    addConstraint(Constraint::createRestricted(*this, kind, restriction,
-                                               first, second,
-                                               getConstraintLocator(locator)));
-  }
+                               ConstraintLocatorBuilder locator);
 
   /// Add a constraint that binds an overload set to a specific choice.
   void addBindOverloadConstraint(Type boundTy, OverloadChoice choice,
