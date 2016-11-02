@@ -727,6 +727,8 @@ static PotentialBindings getPotentialBindings(ConstraintSystem &cs,
   SmallVector<Constraint *, 2> defaultableConstraints;
   bool addOptionalSupertypeBindings = false;
   auto &tc = cs.getTypeChecker();
+  bool hasNonDependentMemberRelationalConstraints = false;
+  bool hasDependentMemberRelationalConstraints = false;
   for (auto constraint : constraints) {
     // Only visit each constraint once.
     if (!visitedConstraints.insert(constraint).second)
@@ -761,8 +763,10 @@ static PotentialBindings getPotentialBindings(ConstraintSystem &cs,
     case ConstraintKind::Defaultable:
       // Do these in a separate pass.
       if (cs.getFixedTypeRecursive(constraint->getFirstType(), true)
-            ->getAs<TypeVariableType>() == typeVar)
+            ->getAs<TypeVariableType>() == typeVar) {
         defaultableConstraints.push_back(constraint);
+        hasNonDependentMemberRelationalConstraints = true;
+      }
       continue;
 
     case ConstraintKind::Disjunction:
@@ -795,6 +799,7 @@ static PotentialBindings getPotentialBindings(ConstraintSystem &cs,
 
       // Note that we have a literal constraint with this protocol.
       literalProtocols.insert(constraint->getProtocol());
+      hasNonDependentMemberRelationalConstraints = true;
 
       // Handle unspecialized types directly.
       if (!defaultType->isUnspecializedGeneric()) {
@@ -912,6 +917,17 @@ static PotentialBindings getPotentialBindings(ConstraintSystem &cs,
                                               &result.InvolvesTypeVariables);
       continue;
     }
+
+    // If the type we'd be binding to is a dependent member, don't try to
+    // resolve this type variable yet.
+    if (type->is<DependentMemberType>()) {
+      if (!ConstraintSystem::typeVarOccursInType(
+             typeVar, type, &result.InvolvesTypeVariables)) {
+        hasDependentMemberRelationalConstraints = true;
+      }
+      continue;
+    }
+    hasNonDependentMemberRelationalConstraints = true;
 
     // Check whether we can perform this binding.
     // FIXME: this has a super-inefficient extraneous simplifyType() in it.
@@ -1105,6 +1121,15 @@ static PotentialBindings getPotentialBindings(ConstraintSystem &cs,
         binding.BindingType = OptionalType::get(binding.BindingType);
       }
     }
+  }
+
+  // If there were both dependent-member and non-dependent-member relational
+  // constraints, consider this "fully bound"; we don't want to touch it.
+  if (hasDependentMemberRelationalConstraints) {
+    if (hasNonDependentMemberRelationalConstraints)
+      result.FullyBound = true;
+    else
+      result.Bindings.clear();
   }
 
   return result;

@@ -93,7 +93,7 @@ func <(lhs: IntWrapper, rhs: IntWrapper) -> Bool {
 prefix func ***(lhs: IntWrapper) {}
 
 // This is provided as an operator but not implemented here.
-prefix operator ^^^ {}
+prefix operator ^^^
 
 // CHECK-DAG: "ClassFromOtherFile"
 class Subclass : ClassFromOtherFile {}
@@ -126,9 +126,9 @@ protocol ExpressibleByExtraFloatLiteral
 private protocol ExpressibleByExtraCharLiteral : ExpressibleByUnicodeScalarLiteral {
 }
 
-prefix operator ~~~ {}
+prefix operator ~~~
 protocol ThreeTilde {
-  prefix func ~~~(lhs: Self)
+  prefix static func ~~~(lhs: Self)
 }
 
 private struct ThreeTildeTypeImpl : ThreeTilde {
@@ -141,7 +141,7 @@ func overloadedOnProto<T: ThreeTilde>(_: T) {}
 private prefix func ~~~(_: ThreeTildeTypeImpl) {}
 
 // CHECK-DAG: - "~~~~"
-prefix operator ~~~~ {}
+prefix operator ~~~~
 protocol FourTilde {
   prefix static func ~~~~(arg: Self)
 }
@@ -405,7 +405,6 @@ struct Sentinel2 {}
 // CHECK-DAG: - ["Ps25ExpressibleByFloatLiteral", ""]
 // CHECK-DAG: - !private ["Ps33ExpressibleByUnicodeScalarLiteral", ""]
 // CHECK-DAG: - !private ["Ps10Strideable", "Stride"]
-// CHECK-DAG: - !private ["Sa", "Element"]
 // CHECK-DAG: - !private ["Sa", "reduce"]
 // CHECK-DAG: - !private ["Sb", "_getBuiltinLogicValue"]
 // CHECK-DAG: - ["Sb", "InnerToBool"]
