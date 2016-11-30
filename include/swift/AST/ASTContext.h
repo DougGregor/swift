@@ -815,6 +815,7 @@ private:
 
   friend class ArchetypeType;
   friend class ArchetypeBuilder::PotentialArchetype;
+  friend class PotentialArchetypeSubstitution;
 
   /// Provide context-level uniquing for SIL lowered type layouts.
   friend SILLayout;
