@@ -2342,8 +2342,10 @@ bool TypeChecker::isConvertibleTo(Type type1, Type type2, DeclContext *dc) {
 
 bool TypeChecker::isExplicitlyConvertibleTo(Type type1, Type type2,
                                             DeclContext *dc) {
-  return typesSatisfyConstraint(type1, type2,
-                                ConstraintKind::ExplicitConversion, dc);
+  return typesSatisfyConstraint(type1, type2, ConstraintKind::Conversion, dc) ||
+    (Context.LangOpts.EnableObjCInterop &&
+     typesSatisfyConstraint(type1, type2, ConstraintKind::BridgingConversion,
+                            dc));
 }
 
 bool TypeChecker::checkedCastMaySucceed(Type t1, Type t2, DeclContext *dc) {
@@ -2450,7 +2452,7 @@ bool TypeChecker::convertToType(Expr *&expr, Type type, DeclContext *dc,
 
   // If there is a type that we're expected to convert to, add the conversion
   // constraint.
-  cs.addConstraint(ConstraintKind::ExplicitConversion, cs.getType(expr), type,
+  cs.addConstraint(ConstraintKind::Conversion, cs.getType(expr), type,
                    cs.getConstraintLocator(expr));
 
   if (getLangOpts().DebugConstraintSolver) {
@@ -2796,10 +2798,8 @@ CheckedCastKind TypeChecker::typeCheckCheckedCast(Type fromType,
                                  SourceRange diagToRange,
                                  std::function<bool (Type)> convertToType,
                                  bool suppressDiagnostics) {
-  // If the from/to types are equivalent or explicitly convertible,
-  // this is a coercion.
-  if (fromType->isEqual(toType) ||
-      isExplicitlyConvertibleTo(fromType, toType, dc)) {
+  // If the from/to types are equivalent or convertible, this is a coercion.
+  if (fromType->isEqual(toType) || isConvertibleTo(fromType, toType, dc)) {
     return CheckedCastKind::Coercion;
   }
 
@@ -2847,6 +2847,30 @@ CheckedCastKind TypeChecker::typeCheckCheckedCast(Type fromType,
         .highlight(diagToRange);
     }
     return CheckedCastKind::Unresolved;
+  }
+
+  // FIXME: this really means "if it's bridged".
+  if (extraFromOptionals == 0 &&
+      isExplicitlyConvertibleTo(fromType, toType, dc))
+    return CheckedCastKind::BridgingCast;
+
+  // Check for casts between specific concrete types that cannot succeed.
+  ConstraintSystem cs(*this, dc, ConstraintSystemOptions());
+
+  if (cs.isArrayType(toType) && cs.isArrayType(fromType)) {
+    return CheckedCastKind::ArrayDowncast;
+  }
+
+  if (cs.isDictionaryType(toType) && cs.isDictionaryType(fromType))
+    return CheckedCastKind::DictionaryDowncast;
+
+  if (cs.isSetType(toType) && cs.isSetType(fromType))
+    return CheckedCastKind::SetDowncast;
+
+  // If we can bridge through an Objective-C class, do so.
+  if (Type objCClass = getDynamicBridgedThroughObjCClass(dc, fromType, toType)){
+    if (isSubtypeOf(objCClass, fromType, dc))
+      return CheckedCastKind::BridgeFromObjectiveC;
   }
 
   // Strip metatypes. If we can cast two types, we can cast their metatypes.
@@ -2899,20 +2923,6 @@ CheckedCastKind TypeChecker::typeCheckCheckedCast(Type fromType,
   if (toExistential || fromExistential || fromArchetype || toArchetype)
     return CheckedCastKind::ValueCast;
 
-  // Check for casts between concrete types that cannot succeed.
-
-  ConstraintSystem cs(*this, dc, ConstraintSystemOptions());
-  
-  if (cs.isArrayType(toType) && cs.isArrayType(fromType)) {
-    return CheckedCastKind::ArrayDowncast;
-  }
-
-  if (cs.isDictionaryType(toType) && cs.isDictionaryType(fromType))
-    return CheckedCastKind::DictionaryDowncast;
-
-  if (cs.isSetType(toType) && cs.isSetType(fromType))
-    return CheckedCastKind::SetDowncast;
-
   if (cs.isAnyHashableType(toType) || cs.isAnyHashableType(fromType)) {
     return CheckedCastKind::ValueCast;
   }
@@ -2923,11 +2933,11 @@ CheckedCastKind TypeChecker::typeCheckCheckedCast(Type fromType,
     return CheckedCastKind::ValueCast;
   }
 
-  // If we can bridge through an Objective-C class, do so.
-  if (Type objCClass = getDynamicBridgedThroughObjCClass(dc, fromType, toType)){
-    if (isSubtypeOf(objCClass, fromType, dc))
-      return CheckedCastKind::BridgeFromObjectiveC;
-  }
+  // If explicit conversion is allowed (in either direction), this is a value
+  // cast.
+  if (isExplicitlyConvertibleTo(fromType, toType, dc) ||
+      isExplicitlyConvertibleTo(toType, fromType, dc))
+    return CheckedCastKind::ValueCast;
 
   // Objective-C metaclasses are subclasses of NSObject in the ObjC runtime,
   // so casts from NSObject to potentially-class metatypes may succeed.

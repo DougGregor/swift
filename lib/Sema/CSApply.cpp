@@ -2951,6 +2951,7 @@ namespace {
         // Invalid type check.
         return nullptr;
       case CheckedCastKind::Coercion:
+      case CheckedCastKind::BridgingCast:
         // Check is trivially true.
         tc.diagnose(expr->getLoc(), diag::isa_is_always_true, "is");
         expr->setCastKind(castKind);
@@ -3154,34 +3155,73 @@ namespace {
     }
 
     Expr *visitCoerceExpr(CoerceExpr *expr) {
+      return visitCoerceExpr(expr, None);
+    }
+
+    Expr *visitCoerceExpr(CoerceExpr *expr, Optional<unsigned> choice) {
       // Simplify the type we're casting to.
       auto toType = simplifyType(expr->getCastTypeLoc().getType());
       expr->getCastTypeLoc().setType(toType, /*validated=*/true);
       checkForImportedUsedConformances(toType);
 
-      // Determine whether we performed a coercion or downcast.
-      if (cs.shouldAttemptFixes()) {
-        auto locator = cs.getConstraintLocator(expr);
-        unsigned choice = solution.getDisjunctionChoice(locator);
-        (void) choice;
-        assert(choice == 0 &&
-          "checked cast branch of disjunction should have resulted in Fix");
+      auto &tc = cs.getTypeChecker();
+
+      // Turn the subexpression into an rvalue.
+      if (auto rvalueSub = cs.coerceToRValue(expr->getSubExpr()))
+        expr->setSubExpr(rvalueSub);
+      else
+        return nullptr;
+
+      // If we weren't explicitly told by the caller which disjunction choice,
+      // get it from the solution to determine whether we've picked a coercion
+      // or a bridging conversion.
+      auto locator = cs.getConstraintLocator(expr);
+      if (!choice) {
+        choice = solution.getDisjunctionChoice(locator);
       }
 
-      auto &tc = cs.getTypeChecker();
-      auto sub = cs.coerceToRValue(expr->getSubExpr());
+      // Handle the coercion/bridging of the underlying subexpression, where
+      // optionality has been removed.
+      if (*choice == 0) {
+        // Convert the subexpression.
+        Expr *sub = expr->getSubExpr();
+        if (tc.convertToType(sub, toType, cs.DC))
+          return nullptr;
 
-      // The subexpression is always an rvalue.
-      if (!sub)
+        expr->setSubExpr(sub);
+        cs.setType(expr, toType);
+        return expr;
+      }
+
+      // Bridging conversion.
+      assert(*choice == 1 && "should be bridging");
+
+      // Handle optional bindings.
+      Expr *result = handleOptionalBindings(expr, toType,
+                                            /*conditionalCast=*/false);
+      if (!result)
         return nullptr;
 
-      // Convert the subexpression.
-      if (tc.convertToType(sub, toType, cs.DC))
-        return nullptr;
+      Expr *sub = expr->getSubExpr();
+      Type toInstanceType = toType->lookThroughAllAnyOptionalTypes();
+      if (toInstanceType->isBridgeableObjectType()) {
+        // Bridging to Objective-C.
+        Expr *objcExpr = bridgeToObjectiveC(sub);
+        if (!objcExpr)
+          return nullptr;
+
+        sub = coerceToType(objcExpr, toInstanceType, locator);
+        if (!sub)
+          return nullptr;
+      } else {
+        // Bridging from Objective-C.
+        sub = forceBridgeFromObjectiveC(sub, toInstanceType);
+        if (!sub)
+          return nullptr;
+      }
 
       expr->setSubExpr(sub);
-      cs.setType(expr, toType);
-      return expr;
+      return result;
     }
 
     Expr *visitForcedCheckedCastExpr(ForcedCheckedCastExpr *expr) {
@@ -3212,7 +3252,8 @@ namespace {
         /// Invalid cast.
       case CheckedCastKind::Unresolved:
         return nullptr;
-      case CheckedCastKind::Coercion: {
+      case CheckedCastKind::Coercion:
+      case CheckedCastKind::BridgingCast: {
         if (SuppressDiagnostics)
           return nullptr;
 
@@ -3228,18 +3269,13 @@ namespace {
                           "as");
         }
 
-        // Convert the subexpression.
-        bool failed = tc.convertToType(sub, toType, cs.DC);
-        (void)failed;
-        assert(!failed && "Not convertible?");
-
         // Transmute the checked cast into a coercion expression.
-        Expr *result = new (tc.Context) CoerceExpr(sub, expr->getLoc(),
+        auto *result = new (tc.Context) CoerceExpr(sub, expr->getLoc(),
                                                    expr->getCastTypeLoc());
-
-        // The result type is the type we're converting to.
         cs.setType(result, toType);
-        return result;
+        unsigned disjunctionChoice =
+          (castKind == CheckedCastKind::Coercion ? 0 : 1);
+        return visitCoerceExpr(result, disjunctionChoice);
       }
 
       // Valid casts.
@@ -3284,24 +3320,24 @@ namespace {
         /// Invalid cast.
       case CheckedCastKind::Unresolved:
         return nullptr;
-      case CheckedCastKind::Coercion: {
+      case CheckedCastKind::Coercion:
+      case CheckedCastKind::BridgingCast: {
         if (SuppressDiagnostics)
           return nullptr;
 
         tc.diagnose(expr->getLoc(), diag::conditional_downcast_coercion,
                     cs.getType(sub), toType);
 
-        // Convert the subexpression.
-        bool failed = tc.convertToType(sub, toType, cs.DC);
-        (void)failed;
-        assert(!failed && "Not convertible?");
 
         // Transmute the checked cast into a coercion expression.
-        Expr *result = new (tc.Context) CoerceExpr(sub, expr->getLoc(),
+        auto *coerce = new (tc.Context) CoerceExpr(sub, expr->getLoc(),
                                                    expr->getCastTypeLoc());
-
-        // The result type is the type we're converting to.
-        cs.setType(result, toType);
+        cs.setType(coerce, toType);
+        unsigned disjunctionChoice =
+          (castKind == CheckedCastKind::Coercion ? 0 : 1);
+        Expr *result = visitCoerceExpr(coerce, disjunctionChoice);
+        if (!result)
+          return nullptr;
 
         // Wrap the result in an optional.
         return cs.cacheType(new (tc.Context) InjectIntoOptionalExpr(
@@ -5533,17 +5569,6 @@ Expr *ExprRewriter::coerceToType(Expr *expr, Type toType,
       return cs.cacheType(new (tc.Context) PointerToPointerExpr(expr, toType));
     }
 
-    case ConversionRestrictionKind::BridgeToObjC: {
-      Expr *objcExpr = bridgeToObjectiveC(expr);
-      if (!objcExpr)
-        return nullptr;
-
-      return coerceToType(objcExpr, toType, locator);
-    }
-    
-    case ConversionRestrictionKind::BridgeFromObjC:
-      return forceBridgeFromObjectiveC(expr, toType);
-
     case ConversionRestrictionKind::CFTollFreeBridgeToObjC: {
       auto foreignClass = fromType->getClassOrBoundGenericClass();
       auto objcType = foreignClass->getAttrs().getAttribute<ObjCBridgedAttr>()
@@ -6806,6 +6831,7 @@ bool ConstraintSystem::applySolutionFix(Expr *expr,
         // Fix didn't work, let diagnoseFailureForExpr handle this.
         return false;
       case CheckedCastKind::Coercion:
+      case CheckedCastKind::BridgingCast:
         llvm_unreachable("Coercions handled in other disjunction branch");
 
       // Valid casts.

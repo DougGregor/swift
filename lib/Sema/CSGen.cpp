@@ -2516,24 +2516,37 @@ namespace {
       auto fromType = CS.getType(expr->getSubExpr());
       auto locator = CS.getConstraintLocator(expr);
 
+      SmallVector<Constraint *, 3> constraints;
+
+      // Coercion (the common case).
+      Constraint *coerceConstraint =
+        Constraint::create(CS, ConstraintKind::Conversion,
+                           fromType, toType, DeclName(),
+                           FunctionRefKind::Compound,
+                           locator);
+      coerceConstraint->setFavored();
+      constraints.push_back(coerceConstraint);
+
+      // Bridging.
+      if (CS.getASTContext().LangOpts.EnableObjCInterop) {
+        // The source type can be explicitly converted to the destination type.
+        Constraint *bridgingConstraint =
+          Constraint::create(CS, ConstraintKind::BridgingConversion,
+                     fromType, toType, DeclName(),
+                     FunctionRefKind::Compound,
+                     locator);
+        constraints.push_back(bridgingConstraint);
+      }
+
       if (CS.shouldAttemptFixes()) {
-        Constraint *coerceConstraint =
-          Constraint::create(CS, ConstraintKind::ExplicitConversion,
-                             fromType, toType, DeclName(),
-                             FunctionRefKind::Compound,
-                             locator);
         Constraint *downcastConstraint =
           Constraint::createFixed(CS, ConstraintKind::CheckedCast,
                                   FixKind::CoerceToCheckedCast, fromType,
                                   toType, locator);
-        coerceConstraint->setFavored();
-        auto constraints = { coerceConstraint, downcastConstraint };
-        CS.addDisjunctionConstraint(constraints, locator, RememberChoice);
-      } else {
-        // The source type can be explicitly converted to the destination type.
-        CS.addConstraint(ConstraintKind::ExplicitConversion, fromType, toType,
-                         locator);
+        constraints.push_back(downcastConstraint);
       }
+
+      CS.addDisjunctionConstraint(constraints, locator, RememberChoice);
 
       return toType;
     }

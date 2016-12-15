@@ -2166,6 +2166,12 @@ private:
                                           TypeMatchOptions flags,
                                           ConstraintLocatorBuilder locator);
 
+  /// \brief Attempt to simplify the BridgingConversion constraint.
+  SolutionKind simplifyBridgingConstraint(Type type1,
+                                         Type type2,
+                                         TypeMatchOptions flags,
+                                         ConstraintLocatorBuilder locator);
+
   /// \brief Attempt to simplify the ApplicableFunction constraint.
   SolutionKind simplifyApplicableFnConstraint(
                                       Type type1,
