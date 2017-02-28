@@ -1099,7 +1099,7 @@ resolveTopLevelIdentTypeComponent(TypeChecker &TC, DeclContext *DC,
                    : (type->is<ProtocolType>() || type->is<ClassType>());
       if (!protocolOrClass) {
         auto diagnosedType = hasError ? typeDecl->getDeclaredInterfaceType() : type;
-        if (diagnosedType) {
+        if (diagnosedType && /*FIXME:*/!hasError) {
           TC.diagnose(comp->getIdLoc(),
                       diag::inheritance_from_non_protocol_or_class,
                       diagnosedType);
