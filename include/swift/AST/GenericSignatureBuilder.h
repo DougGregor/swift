@@ -374,6 +374,9 @@ private:
                           FloatingRequirementSource source,
                           UnresolvedHandlingKind unresolvedHandling);
 
+  /// Note that we have added the nested type nestedPA
+  void addedNestedType(PotentialArchetype *nestedPA);
+
   /// \brief Add a new conformance requirement specifying that the given
   /// potential archetypes are equivalent.
   ConstraintResult addSameTypeRequirementBetweenArchetypes(

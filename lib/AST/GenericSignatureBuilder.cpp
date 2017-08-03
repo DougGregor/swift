@@ -2007,32 +2007,8 @@ PotentialArchetype *PotentialArchetype::updateNestedTypeForConformance(
       else
         resultPA = new PotentialArchetype(this, concreteDecl);
 
-      auto &allNested = NestedTypes[name];
-      allNested.push_back(resultPA);
-
-      // We created a new type, which might be equivalent to a type by the
-      // same name elsewhere.
-      PotentialArchetype *existingPA = nullptr;
-      if (allNested.size() > 1) {
-        existingPA = allNested.front();
-      } else {
-        auto rep = getRepresentative();
-        if (rep != this) {
-          if (assocType)
-            existingPA = rep->getNestedType(assocType, builder);
-          else
-            existingPA = rep->getNestedType(concreteDecl, builder);
-        }
-      }
-
-      if (existingPA) {
-        auto sameNamedSource =
-          RequirementSource::forNestedTypeNameMatch(existingPA);
-        builder.addSameTypeRequirement(
-                                 existingPA, resultPA, sameNamedSource,
-                                 UnresolvedHandlingKind::GenerateConstraints);
-      }
-
+      NestedTypes[name].push_back(resultPA);
+      builder.addedNestedType(resultPA);
       shouldUpdatePA = true;
       break;
     }
@@ -3188,6 +3164,77 @@ void GenericSignatureBuilder::PotentialArchetype::addSameTypeConstraint(
       .push_back({otherPA, this, source});
     ++NumSameTypeConstraints;
   }
+}
+
+/// Retrieve any same-type constraint that helped form the given equivalence
+/// class.
+static const RequirementSource *getAnySameTypeConstraint(
+                                               EquivalenceClass *equivClass) {
+  const RequirementSource *result = nullptr;
+  bool resultIsSelfDerived = false;
+  for (const auto &entry : equivClass->sameTypeConstraints) {
+    for (const auto &constraint : entry.second) {
+      bool derivedViaConcrete = false;
+      if (!result ||
+          (resultIsSelfDerived &&
+           !constraint.source->isSelfDerivedSource(constraint.archetype,
+                                                   derivedViaConcrete))) {
+       result = constraint.source;
+       if (resultIsSelfDerived)
+         resultIsSelfDerived = false;
+       else
+         resultIsSelfDerived =
+           constraint.source->isSelfDerivedSource(constraint.archetype,
+                                                  derivedViaConcrete);
+      }
+    }
+  }
+
+  assert(result && "Only one potential archetype in this equivalence class?");
+  return result;
+}
+
+void GenericSignatureBuilder::addedNestedType(PotentialArchetype *nestedPA) {
+  // If there was already another type with this name within the parent
+  // potential archetype, equate this type with that one.
+  auto parentPA = nestedPA->getParent();
+  auto &allNested = parentPA->NestedTypes[nestedPA->getNestedName()];
+  assert(!allNested.empty());
+  assert(allNested.back() == nestedPA);
+  if (allNested.size() > 1) {
+    // Quietly infer the same-type constraint. This is based on a structural
+    // name match.
+    auto firstPA = allNested.front();
+    addSameTypeRequirement(firstPA, nestedPA,
+                           FloatingRequirementSource::forInferred(
+                                                            nullptr,
+                                                            /*quietly=*/true),
+                           UnresolvedHandlingKind::GenerateConstraints);
+    return;
+  }
+
+  // If our parent type is not the representative, equate this nested
+  // potential archetype to the equivalent nested type within the
+  // representative.
+  auto parentRepPA = parentPA->getRepresentative();
+  if (parentPA == parentRepPA) return;
+
+  auto parentSameTypeSource =
+    getAnySameTypeConstraint(parentRepPA->getOrCreateEquivalenceClass());
+  PotentialArchetype *existingPA;
+  if (auto assocType = nestedPA->getResolvedAssociatedType()) {
+    existingPA = parentRepPA->getNestedType(assocType, *this);
+  } else {
+    existingPA = parentRepPA->getNestedType(nestedPA->getConcreteTypeDecl(),
+                                            *this);
+  }
+
+  auto sameNamedSource =
+    FloatingRequirementSource::forNestedTypeNameMatch(
+                                                parentSameTypeSource,
+                                                nestedPA->getNestedName());
+  addSameTypeRequirement(existingPA, nestedPA, sameNamedSource,
+                         UnresolvedHandlingKind::GenerateConstraints);
 }
 
 ConstraintResult
