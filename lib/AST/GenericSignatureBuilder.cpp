@@ -127,7 +127,6 @@ bool RequirementSource::isAcceptableStorageKind(Kind kind,
   case Inferred:
   case QuietlyInferred:
   case RequirementSignatureSelf:
-  case NestedTypeNameMatch:
   case ConcreteTypeBinding:
     switch (storageKind) {
     case StorageKind::RootArchetype:
@@ -179,6 +178,7 @@ bool RequirementSource::isAcceptableStorageKind(Kind kind,
     }
 
   case Derived:
+  case NestedTypeNameMatch:
     switch (storageKind) {
     case StorageKind::None:
       return true;
@@ -319,11 +319,13 @@ bool RequirementSource::isSelfDerivedSource(PotentialArchetype *pa,
     case RequirementSource::Inferred:
     case RequirementSource::QuietlyInferred:
     case RequirementSource::RequirementSignatureSelf:
+#if false
       for (auto parent = currentPA->getParent(); parent;
            parent = parent->getParent()) {
         if (parent->isInSameEquivalenceClassAs(pa))
           return true;
       }
+#endif
 
       return false;
 
@@ -456,6 +458,7 @@ const RequirementSource *RequirementSource::getMinimalConformanceSource(
       return true;
     }
 
+    case NestedTypeNameMatch:
     case Concrete:
     case Superclass:
     case Parent:
@@ -464,7 +467,6 @@ const RequirementSource *RequirementSource::getMinimalConformanceSource(
     case Explicit:
     case Inferred:
     case QuietlyInferred:
-    case NestedTypeNameMatch:
     case ConcreteTypeBinding:
     case RequirementSignatureSelf:
       rootPA = parentPA;
@@ -556,17 +558,6 @@ const RequirementSource *RequirementSource::forRequirementSignature(
 
 }
 
-const RequirementSource *RequirementSource::forNestedTypeNameMatch(
-                                             PotentialArchetype *root) {
-  auto &builder = *root->getBuilder();
-  REQUIREMENT_SOURCE_FACTORY_BODY(
-                        (nodeID, NestedTypeNameMatch, nullptr, root,
-                         nullptr, nullptr),
-                        (NestedTypeNameMatch, root, nullptr,
-                         WrittenRequirementLoc()),
-                        0, WrittenRequirementLoc());
-}
-
 const RequirementSource *RequirementSource::forConcreteTypeBinding(
                                                    PotentialArchetype *root) {
   auto &builder = *root->getBuilder();
@@ -595,6 +586,15 @@ const RequirementSource *RequirementSource::viaProtocolRequirement(
                          this, dependentType,
                          protocol, writtenLoc),
                         1, writtenLoc);
+}
+
+const RequirementSource *RequirementSource::viaNestedTypeNameMatch(
+                                      GenericSignatureBuilder &builder) const {
+  REQUIREMENT_SOURCE_FACTORY_BODY(
+                        (nodeID, NestedTypeNameMatch, this, nullptr, nullptr,
+                         nullptr),
+                        (NestedTypeNameMatch, this),
+                        0, WrittenRequirementLoc());
 }
 
 const RequirementSource *RequirementSource::viaSuperclass(
@@ -675,7 +675,6 @@ RequirementSource::visitPotentialArchetypesAlongPath(
                              getAssociatedType()->getDeclaredInterfaceType());
   }
 
-  case RequirementSource::NestedTypeNameMatch:
   case RequirementSource::ConcreteTypeBinding:
   case RequirementSource::Explicit:
   case RequirementSource::Inferred:
@@ -687,6 +686,7 @@ RequirementSource::visitPotentialArchetypesAlongPath(
     return rootPA;
   }
 
+  case RequirementSource::NestedTypeNameMatch:
   case RequirementSource::Concrete:
   case RequirementSource::Superclass:
   case RequirementSource::Derived:
@@ -983,8 +983,10 @@ const RequirementSource *FloatingRequirementSource::getSource(
                                protocolReq.written);
   }
 
-  case NestedTypeNameMatch:
-    return RequirementSource::forNestedTypeNameMatch(pa);
+  case NestedTypeNameMatch: {
+    auto baseSource = storage.get<const RequirementSource *>();
+    return baseSource->viaNestedTypeNameMatch(*pa->getBuilder());
+  }
   }
 
   llvm_unreachable("Unhandled FloatingPointRequirementSourceKind in switch.");
@@ -3219,8 +3221,6 @@ void GenericSignatureBuilder::addedNestedType(PotentialArchetype *nestedPA) {
   auto parentRepPA = parentPA->getRepresentative();
   if (parentPA == parentRepPA) return;
 
-  auto parentSameTypeSource =
-    getAnySameTypeConstraint(parentRepPA->getOrCreateEquivalenceClass());
   PotentialArchetype *existingPA;
   if (auto assocType = nestedPA->getResolvedAssociatedType()) {
     existingPA = parentRepPA->getNestedType(assocType, *this);
@@ -3229,12 +3229,33 @@ void GenericSignatureBuilder::addedNestedType(PotentialArchetype *nestedPA) {
                                             *this);
   }
 
+#if true
+  auto parentSameTypeSource =
+    getAnySameTypeConstraint(parentRepPA->getOrCreateEquivalenceClass());
   auto sameNamedSource =
     FloatingRequirementSource::forNestedTypeNameMatch(
                                                 parentSameTypeSource,
                                                 nestedPA->getNestedName());
   addSameTypeRequirement(existingPA, nestedPA, sameNamedSource,
                          UnresolvedHandlingKind::GenerateConstraints);
+#else
+  SmallVector<const RequirementSource *, 4> parentSources;
+  auto equivClass = parentRepPA->getOrCreateEquivalenceClass();
+  for (const auto &entry : equivClass->sameTypeConstraints) {
+    for (const auto &constraint : entry.second) {
+      parentSources.push_back(constraint.source);
+    }
+  }
+
+  for (auto parentSource : parentSources) {
+    auto sameNamedSource =
+      FloatingRequirementSource::forNestedTypeNameMatch(
+                                                  parentSource,
+                                                  nestedPA->getNestedName());
+    addSameTypeRequirement(existingPA, nestedPA, sameNamedSource,
+                           UnresolvedHandlingKind::GenerateConstraints);
+  }
+#endif
 }
 
 ConstraintResult
@@ -4245,6 +4266,10 @@ namespace {
   template<typename T>
   bool removeSelfDerived(std::vector<Constraint<T>> &constraints,
                          bool dropDerivedViaConcrete = true) {
+#ifndef NDEBUG
+    auto oldConstraints = constraints;
+#endif
+
     bool anyDerivedViaConcrete = false;
     // Remove self-derived constraints.
     Optional<Constraint<T>> remainingConcrete;
@@ -4277,6 +4302,20 @@ namespace {
 
     if (constraints.empty() && remainingConcrete)
       constraints.push_back(*remainingConcrete);
+
+#ifndef NDEBUG
+    if (constraints.empty()) {
+      for (const auto &oldConstraint : oldConstraints) {
+        llvm::errs() << "Self-derived constraint: ";
+        oldConstraint.source->dump(llvm::errs(), nullptr, 0);
+        llvm::errs() << '\n';
+        bool derivedViaConcrete;
+        (void)oldConstraint.source->isSelfDerivedSource(oldConstraint.archetype,
+                                                        derivedViaConcrete);
+      }
+      llvm_unreachable("all constraints were self-derived!");
+    }
+#endif
 
     assert(!constraints.empty() && "All constraints were self-derived!");
     return anyDerivedViaConcrete;

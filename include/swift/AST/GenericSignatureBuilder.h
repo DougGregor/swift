@@ -762,17 +762,15 @@ public:
     /// whose requirement signature is being computed.
     RequirementSignatureSelf,
 
-    /// The requirement came from two nested types of the equivalent types whose
-    /// names match.
-    ///
-    /// This is a root requirement source.
-    NestedTypeNameMatch,
-
     /// The requirement is the implicit binding of a potential archetype to
     /// the interface type of the concrete type declaration it represents.
     ///
     /// This is a root requirement source.
     ConcreteTypeBinding,
+
+    /// The requirement came from two nested types of the equivalent types whose
+    /// names match.
+    NestedTypeNameMatch,
 
     /// The requirement is a protocol requirement.
     ///
@@ -902,10 +900,10 @@ private:
     case Inferred:
     case QuietlyInferred:
     case RequirementSignatureSelf:
-    case NestedTypeNameMatch:
     case ConcreteTypeBinding:
       return true;
 
+    case NestedTypeNameMatch:
     case ProtocolRequirement:
     case InferredProtocolRequirement:
     case Superclass:
@@ -1018,10 +1016,6 @@ public:
                                                       PotentialArchetype *root,
                                                       ProtocolDecl *protocol);
 
-  /// Retrieve a requirement source for nested type name matches.
-  static const RequirementSource *forNestedTypeNameMatch(
-                                     PotentialArchetype *root);
-
   /// Retrieve a requirement source describing when a concrete type
   /// declaration is used to define a potential archetype.
   static const RequirementSource *forConcreteTypeBinding(
@@ -1037,6 +1031,10 @@ private:
                              bool inferred,
                              WrittenRequirementLoc writtenLoc =
                                WrittenRequirementLoc()) const;
+
+  /// Retrieve a requirement source for nested type name matches.
+  const RequirementSource *viaNestedTypeNameMatch(
+                                      GenericSignatureBuilder &builder) const;
 
 public:
   /// A requirement source that describes that a requirement that is resolved
