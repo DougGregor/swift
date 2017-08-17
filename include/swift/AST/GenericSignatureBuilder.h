@@ -169,11 +169,67 @@ public:
       /// potential archetypes in this component equivalent to the concrete
       /// type.
       const RequirementSource *concreteTypeSource;
+
+      /// Parent in the union-find data structure used to describe the
+      /// connected components based on non-derived, non-type-name-match
+      /// constraints.
+      unsigned explicitParent;
+
+      /// Parent in the union-find data structure used to collapsed components
+      /// based on derived nested-type-name-match constraints.
+      unsigned collapsedParent;
+
+      /// Form a new derived same-type component.
+      DerivedSameTypeComponent(PotentialArchetype *anchor,
+                               const RequirementSource *concreteTypeSource,
+                               unsigned index)
+        : anchor(anchor), concreteTypeSource(concreteTypeSource),
+          explicitParent(index), collapsedParent(index) { }
+    };
+
+    /// An edge in the same-type constraint graph that spans two different
+    /// components.
+    struct IntercomponentEdge {
+      unsigned source;
+      unsigned target;
+      Constraint<PotentialArchetype *> constraint;
+
+      enum class DerivedState {
+        Unresolved,
+        Derived,
+        NotDerived,
+        Computing,
+      } derived;
+
+      IntercomponentEdge(unsigned source, unsigned target,
+                         const Constraint<PotentialArchetype *> &constraint);
+
+      bool isDerived() const { return derived == DerivedState::Derived; }
+
+      friend bool operator<(const IntercomponentEdge &lhs,
+                            const IntercomponentEdge &rhs);
     };
 
     /// The set of connected components within this equivalence class, using
     /// only the derived same-type constraints in the graph.
     std::vector<DerivedSameTypeComponent> derivedSameTypeComponents;
+
+    /// Mapping from the potential archetypes within this equivalence class
+    /// to the component of that potential archetype in
+    /// \c derivedSameTypeComponents.
+    ///
+    /// FIXME: This should be in temporary storage somehow.
+    llvm::SmallDenseMap<PotentialArchetype *, unsigned>
+      derivedSameTypeComponentOf;
+
+    /// Nested-same-type-constraint edges between the components of the
+    /// same-type graph.
+    ///
+    /// FIXME: This should be in temporary storage somehow.
+    std::vector<IntercomponentEdge> nestedIntercomponentSameTypeEdges;
+
+    /// The next nested intercomponent same-typeedge to proess.
+    unsigned nextNestedIntercomponentSameTypeEdge = 0;
 
     /// Delayed requirements that could be resolved by a change to this
     /// equivalence class.
@@ -214,6 +270,35 @@ public:
     /// Determine whether conformance to the given protocol is satisfied by
     /// a superclass requirement.
     bool isConformanceSatisfiedBySuperclass(ProtocolDecl *proto) const;
+
+    /// Find the representative of a union-find data structure laid on
+    /// top of the derived same-type components graph.
+    ///
+    /// \param index The index of the component into
+    /// \c derivedSameTypeComponents.
+    ///
+    /// \param parentPtr Member pointer used to access the "parent" field in
+    /// the union-find data structure.
+    unsigned findSameTypeRepresentative(
+                             unsigned index,
+                             unsigned DerivedSameTypeComponent::* parentPtr);
+
+    /// Union the same-type components noted that \c index1 and \c index2,
+    /// using the parent pointer described by \c parentPtr.
+    ///
+    /// \returns true if the two components were separate and have now
+    /// been joined.
+    bool unionSameTypeComponents(
+                             unsigned index1, unsigned index2,
+                             unsigned DerivedSameTypeComponent::* parentPtr);
+
+    /// Resolve the intercomponent edges.
+    ///
+    /// Returns \c true if anything was newly-collapsed.
+    bool resolveIntercomponentEdges();
+
+    /// Collapse the derived intercomponent edges.
+    void collapseIntercomponentEdges();
 
     /// Dump a debugging representation of this equivalence class.
     void dump(llvm::raw_ostream &out) const;
@@ -662,6 +747,10 @@ private:
   void checkSameTypeConstraints(
                             ArrayRef<GenericTypeParamType *> genericParams,
                             PotentialArchetype *pa);
+
+  /// Collapse any nested type-name match constraints that are determined to
+  /// be derived from other constraints.
+  void collapseAllNestedTypeNameMatchConstraints();
 
   /// \brief Resolve the given type to the potential archetype it names.
   ///
