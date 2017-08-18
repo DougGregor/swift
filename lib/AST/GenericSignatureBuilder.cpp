@@ -455,6 +455,7 @@ bool RequirementSource::isInferredRequirement(bool includeQuietInferred) const {
       return true;
 
     case QuietlyInferred:
+    case NestedTypeNameMatch:
       return includeQuietInferred;
 
     case ConcreteTypeBinding:
@@ -462,7 +463,6 @@ bool RequirementSource::isInferredRequirement(bool includeQuietInferred) const {
 
     case Concrete:
     case Explicit:
-    case NestedTypeNameMatch:
     case Parent:
     case ProtocolRequirement:
     case RequirementSignatureSelf:
@@ -1490,29 +1490,11 @@ bool EquivalenceClass::areAllRequirementsDerived() const {
 
   SWIFT_DEFER { allDerivedRequirementsComputed = true; };
 
-  // Check conformance constraints.
-  for (const auto &conforms : conformsTo) {
-    if (!areAllDerivedConstraints(conforms.second))
-      return allDerivedRequirements = false;
-  }
-
   // Check same-type constraints.
   for (const auto &sameType : sameTypeConstraints) {
     if (!areAllDerivedConstraints(sameType.second))
       return allDerivedRequirements = false;
   }
-
-  // Check concrete constraints.
-  if (concreteType && !areAllDerivedConstraints(concreteTypeConstraints))
-    return allDerivedRequirements = false;
-
-  // Check superclass constraints.
-  if (superclass && !areAllDerivedConstraints(superclassConstraints))
-    return allDerivedRequirements = false;
-
-  // Check layout constraints.
-  if (layout && !areAllDerivedConstraints(layoutConstraints))
-    return allDerivedRequirements = false;
 
   return allDerivedRequirements = true;
 }
@@ -3504,11 +3486,10 @@ void GenericSignatureBuilder::addedNestedType(PotentialArchetype *nestedPA) {
   assert(allNested.back() == nestedPA);
   if (allNested.size() > 1) {
     auto firstPA = allNested.front();
-    auto sameNamedSource =
-      FloatingRequirementSource::forNestedTypeNameMatch(
-                                                nestedPA->getNestedName());
+    auto quietlyInferredSource =
+      FloatingRequirementSource::forInferred(nullptr, /*quietly=*/true);
 
-    addSameTypeRequirement(firstPA, nestedPA, sameNamedSource,
+    addSameTypeRequirement(firstPA, nestedPA, quietlyInferredSource,
                            UnresolvedHandlingKind::GenerateConstraints);
     return;
   }
@@ -4855,6 +4836,11 @@ static PotentialArchetype *sameTypeDFS(PotentialArchetype *pa,
 
   // Visit its adjacent potential archetypes.
   for (const auto &constraint : pa->getSameTypeConstraints()) {
+    // Skip nested-type-name-match constraints.
+    if (constraint.source->getRoot()->kind ==
+          RequirementSource::NestedTypeNameMatch)
+      continue;
+
     // Skip non-derived constraints.
     if (!constraint.source->isDerivedRequirement()) continue;
 
@@ -5061,9 +5047,15 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
   // Intercomponent edges are stored as one big list, which tracks the
   // source/target components.
   std::vector<IntercomponentEdge> intercomponentEdges;
+  SmallVector<std::pair<unsigned, unsigned>, 2> nestedTypeNameMatchEdges;
   for (auto &entry : equivClass->sameTypeConstraints) {
     auto &constraints = entry.second;
     for (const auto &constraint : constraints) {
+      // Skip nested-type-name-match constraints.
+      if (constraint.source->getRoot()->kind ==
+            RequirementSource::NestedTypeNameMatch)
+        continue;
+
       // If the source/destination are identical, complain.
       if (constraint.archetype == constraint.value) {
         if (!constraint.source->isDerivedRequirement() &&
@@ -5133,7 +5125,12 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
     checkConstraintList<PotentialArchetype *, Type>(
       genericParams, constraints,
       [](const Constraint<PotentialArchetype *> &) { return true; },
-      [](const Constraint<PotentialArchetype *> &) {
+      [](const Constraint<PotentialArchetype *> &constraint) {
+        // Ignore nested-type-name-match constraints.
+        if (constraint.source->getRoot()->kind ==
+              RequirementSource::NestedTypeNameMatch)
+          return ConstraintRelation::Unrelated;
+
         return ConstraintRelation::Redundant;
       },
       None,
