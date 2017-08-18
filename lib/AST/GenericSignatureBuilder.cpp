@@ -4798,9 +4798,9 @@ void GenericSignatureBuilder::checkConformanceConstraints(
 ///
 /// \returns the best archetype anchor seen so far.
 static PotentialArchetype *sameTypeDFS(PotentialArchetype *pa,
-                        unsigned component,
-                        llvm::SmallDenseMap<PotentialArchetype *, unsigned>
-                          &paToComponent) {
+          unsigned component,
+          bool skipNestedTypeNameMatch,
+          llvm::SmallDenseMap<PotentialArchetype *, unsigned> &paToComponent) {
   PotentialArchetype *anchor = pa;
 
   // If we've already visited this potential archetype, we're done.
@@ -4809,14 +4809,17 @@ static PotentialArchetype *sameTypeDFS(PotentialArchetype *pa,
   // Visit its adjacent potential archetypes.
   for (const auto &constraint : pa->getSameTypeConstraints()) {
     // Skip nested-type-name-match constraints.
-    if (constraint.source->getRoot()->kind ==
+    if (skipNestedTypeNameMatch &&
+        constraint.source->getRoot()->kind ==
           RequirementSource::NestedTypeNameMatch)
       continue;
 
     // Skip non-derived constraints.
     if (!constraint.source->isDerivedRequirement()) continue;
 
-    auto newAnchor = sameTypeDFS(constraint.value, component, paToComponent);
+    auto newAnchor =
+      sameTypeDFS(constraint.value, component, skipNestedTypeNameMatch,
+                  paToComponent);
 
     // If this type is better than the anchor, use it for the anchor.
     if (compareDependentTypes(&newAnchor, &anchor) < 0)
@@ -4888,6 +4891,7 @@ static PotentialArchetype *getLocalAnchor(PotentialArchetype *pa,
 /// canonical edges connects vertex i to vertex i+1 for i in 0..<size-1.
 static void computeDerivedSameTypeComponents(
               PotentialArchetype *rep,
+              bool skipNestedTypeNameMatch,
               llvm::SmallDenseMap<PotentialArchetype *, unsigned> &componentOf){
   // Perform a depth-first search to identify the components.
   auto equivClass = rep->getOrCreateEquivalenceClass();
@@ -4898,7 +4902,8 @@ static void computeDerivedSameTypeComponents(
     if (componentOf.count(pa) != 0) continue;
 
     // Find all of the potential archetypes within this connected component.
-    auto anchor = sameTypeDFS(pa, components.size(), componentOf);
+    auto anchor = sameTypeDFS(pa, components.size(), skipNestedTypeNameMatch,
+                              componentOf);
 
     // Record the anchor.
     components.push_back({anchor, nullptr});
@@ -5003,7 +5008,8 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
   // Compute the components in the subgraph of the same-type constraint graph
   // that includes only derived constraints.
   llvm::SmallDenseMap<PotentialArchetype *, unsigned> componentOf;
-  computeDerivedSameTypeComponents(pa, componentOf);
+  computeDerivedSameTypeComponents(pa, /*skipNestedTypeNameMatch=*/true,
+                                   componentOf);
 
   // Go through all of the same-type constraints, collecting all of the
   // non-derived constraints to put them into bins: intra-component and
@@ -5195,6 +5201,13 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
       connected[edge.target] = true;
     }
   }
+
+  // Recompute derived same-type components, this time considering
+  // nested-type-name-match sources.
+  componentOf.clear();
+  equivClass->derivedSameTypeComponents.clear();
+  computeDerivedSameTypeComponents(pa, /*skipNestedTypeNameMatch=*/false,
+                                   componentOf);
 }
 
 /// Resolve any unresolved dependent member types using the given builder.

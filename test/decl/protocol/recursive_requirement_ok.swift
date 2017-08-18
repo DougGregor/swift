@@ -21,7 +21,6 @@ protocol P1 {
 }
 
 // CHECK-LABEL: .P2@
-// FIXME: This ends up being <Self where Self == Self.Y.X, Self.Y : P1, Self.Z : P1, Self.Y.X == Self.Y.X.Y.X>
 // CHECK: Requirement signature: <Self where Self == Self.Y.X, Self.Y : P1, Self.Z : P1>
 protocol P2 {
   associatedtype Y : P1 where Y.X == Self
