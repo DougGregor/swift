@@ -1473,6 +1473,32 @@ bool EquivalenceClass::isConformanceSatisfiedBySuperclass(
   return false;
 }
 
+namespace {
+  template<typename T>
+  bool areAllDerivedConstraints(const std::vector<Constraint<T>> &constraints) {
+    for (const auto &constraint : constraints) {
+      if (!constraint.source->isDerivedRequirement())
+        return false;
+    }
+
+    return true;
+  }
+}
+
+bool EquivalenceClass::areAllRequirementsDerived() const {
+  if (allDerivedRequirementsComputed) return allDerivedRequirements;
+
+  SWIFT_DEFER { allDerivedRequirementsComputed = true; };
+
+  // Check same-type constraints.
+  for (const auto &sameType : sameTypeConstraints) {
+    if (!areAllDerivedConstraints(sameType.second))
+      return allDerivedRequirements = false;
+  }
+
+  return allDerivedRequirements = true;
+}
+
 void EquivalenceClass::dump(llvm::raw_ostream &out) const {
   out << "Equivalence class represented by "
     << members.front()->getRepresentative()->getDebugName() << ":\n";
@@ -2676,7 +2702,9 @@ void GenericSignatureBuilder::PotentialArchetype::dump(llvm::raw_ostream &Out,
 #pragma mark Equivalence classes
 EquivalenceClass::EquivalenceClass(PotentialArchetype *representative)
   : recursiveConcreteType(false), invalidConcreteType(false),
-    recursiveSuperclassType(false) {
+    recursiveSuperclassType(false), allDerivedRequirements(false),
+    allDerivedRequirementsComputed(false)
+{
   members.push_back(representative);
 }
 
@@ -5504,7 +5532,8 @@ void GenericSignatureBuilder::enumerateRequirements(llvm::function_ref<
       // If we're at the last anchor in the component, do nothing;
       auto nextAnchor = knownAnchor;
       ++nextAnchor;
-      if (nextAnchor != equivClass->derivedSameTypeComponents.end()) {
+      if (nextAnchor != equivClass->derivedSameTypeComponents.end() &&
+          !equivClass->areAllRequirementsDerived()) {
         // Form a same-type constraint from this anchor within the component
         // to the next.
         // FIXME: Distinguish between explicit and inferred here?
