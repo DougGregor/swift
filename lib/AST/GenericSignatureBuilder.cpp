@@ -1475,13 +1475,13 @@ bool EquivalenceClass::isConformanceSatisfiedBySuperclass(
 
 namespace {
   template<typename T>
-  bool areAllDerivedConstraints(const std::vector<Constraint<T>> &constraints) {
+  bool hasAnyDerivedConstraint(const std::vector<Constraint<T>> &constraints) {
     for (const auto &constraint : constraints) {
-      if (!constraint.source->isDerivedRequirement())
-        return false;
+      if (constraint.source->isDerivedRequirement())
+        return true;
     }
 
-    return true;
+    return false;
   }
 }
 
@@ -1490,11 +1490,25 @@ bool EquivalenceClass::areAllRequirementsDerived() const {
 
   SWIFT_DEFER { allDerivedRequirementsComputed = true; };
 
-  // Check same-type constraints.
-  for (const auto &sameType : sameTypeConstraints) {
-    if (!areAllDerivedConstraints(sameType.second))
+  // Concrete type constraints.
+  if (concreteType && !hasAnyDerivedConstraint(concreteTypeConstraints))
+    return allDerivedRequirements = false;
+
+  // Superclass type constraints.
+  if (superclass && !hasAnyDerivedConstraint(superclassConstraints))
+    return allDerivedRequirements = false;
+
+  // Layout constraints.
+  if (layout && !hasAnyDerivedConstraint(layoutConstraints))
+    return allDerivedRequirements = false;
+
+  // Conformance constraints.
+  for (const auto &conformsToEntry : conformsTo) {
+    if (!hasAnyDerivedConstraint(conformsToEntry.second))
       return allDerivedRequirements = false;
   }
+
+  // FIXME: Figure out how same-type constraints fit in.
 
   return allDerivedRequirements = true;
 }
@@ -3500,14 +3514,10 @@ void GenericSignatureBuilder::addedNestedType(PotentialArchetype *nestedPA) {
   auto parentRepPA = parentPA->getRepresentative();
   if (parentPA == parentRepPA) return;
 
-  PotentialArchetype *existingPA;
-  if (auto assocType = nestedPA->getResolvedAssociatedType()) {
-    existingPA = parentRepPA->getNestedType(assocType, *this);
-  } else {
-    existingPA = parentRepPA->getNestedType(nestedPA->getConcreteTypeDecl(),
-                                            *this);
-  }
+  auto assocType = nestedPA->getResolvedAssociatedType();
+  if (!assocType) return;
 
+  auto *existingPA = parentRepPA->getNestedType(assocType, *this);
   auto sameNamedSource =
     FloatingRequirementSource::forNestedTypeNameMatch(
                                                 nestedPA->getNestedName());
@@ -4816,6 +4826,21 @@ void GenericSignatureBuilder::checkConformanceConstraints(
   }
 }
 
+/// Determine whether any ancestors are already in the same equivalence class.
+static bool ancestorsInSameEquivalenceClass(PotentialArchetype *pa1,
+                                            PotentialArchetype *pa2,
+                                            bool skipImmediateParent = true) {
+  PotentialArchetype *parent1 = pa1->getParent();
+  PotentialArchetype *parent2 = pa2->getParent();
+  if (!parent1 || !parent2) return false;
+
+  if (!skipImmediateParent && parent1->isInSameEquivalenceClassAs(parent2))
+    return true;
+
+  return ancestorsInSameEquivalenceClass(parent1, parent2,
+                                         /*skipImmediateParent=*/false);
+}
+
 /// Perform a depth-first search from the given potential archetype through
 /// the *implicit* same-type constraints.
 ///
@@ -4836,11 +4861,28 @@ static PotentialArchetype *sameTypeDFS(PotentialArchetype *pa,
 
   // Visit its adjacent potential archetypes.
   for (const auto &constraint : pa->getSameTypeConstraints()) {
-    // Skip nested-type-name-match constraints.
-    if (skipNestedTypeNameMatch &&
-        constraint.source->getRoot()->kind ==
-          RequirementSource::NestedTypeNameMatch)
-      continue;
+    // Treat nested-type-name-match constraints specially.
+    if (constraint.source->getRoot()->kind ==
+          RequirementSource::NestedTypeNameMatch) {
+      // If we're skipping them unconditionally, do so now.
+      if (skipNestedTypeNameMatch) continue;
+
+#if false
+      if (constraint.archetype->isInSameEquivalenceClassAs(
+                                         constraint.archetype->getParent()))
+        continue;
+
+      if (constraint.archetype->getResolvedAssociatedType() ==
+            constraint.value->getResolvedAssociatedType() ||
+          constraint.archetype->getParent()->isInSameEquivalenceClassAs(constraint.value->getParent()))
+        continue;
+
+      // Otherwise, skip if they have ancestors in the same equivalence class.
+      if (ancestorsInSameEquivalenceClass(constraint.archetype,
+                                          constraint.value))
+        continue;
+#endif
+    }
 
     // Skip non-derived constraints.
     if (!constraint.source->isDerivedRequirement()) continue;
@@ -5230,12 +5272,14 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
     }
   }
 
+#if true
   // Recompute derived same-type components, this time considering
   // nested-type-name-match sources.
   componentOf.clear();
   equivClass->derivedSameTypeComponents.clear();
-  computeDerivedSameTypeComponents(pa, /*skipNestedTypeNameMatch=*/false,
+  computeDerivedSameTypeComponents(pa, /*skipNestedTypeNameMatch=*/true,
                                    componentOf);
+#endif
 }
 
 /// Resolve any unresolved dependent member types using the given builder.
@@ -5532,8 +5576,8 @@ void GenericSignatureBuilder::enumerateRequirements(llvm::function_ref<
       // If we're at the last anchor in the component, do nothing;
       auto nextAnchor = knownAnchor;
       ++nextAnchor;
-      if (nextAnchor != equivClass->derivedSameTypeComponents.end() &&
-          !equivClass->areAllRequirementsDerived()) {
+      if (nextAnchor != equivClass->derivedSameTypeComponents.end() /* &&
+          !equivClass->areAllRequirementsDerived()*/) {
         // Form a same-type constraint from this anchor within the component
         // to the next.
         // FIXME: Distinguish between explicit and inferred here?
