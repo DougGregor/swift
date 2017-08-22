@@ -1473,46 +1473,6 @@ bool EquivalenceClass::isConformanceSatisfiedBySuperclass(
   return false;
 }
 
-namespace {
-  template<typename T>
-  bool hasAnyDerivedConstraint(const std::vector<Constraint<T>> &constraints) {
-    for (const auto &constraint : constraints) {
-      if (constraint.source->isDerivedRequirement())
-        return true;
-    }
-
-    return false;
-  }
-}
-
-bool EquivalenceClass::areAllRequirementsDerived() const {
-  if (allDerivedRequirementsComputed) return allDerivedRequirements;
-
-  SWIFT_DEFER { allDerivedRequirementsComputed = true; };
-
-  // Concrete type constraints.
-  if (concreteType && !hasAnyDerivedConstraint(concreteTypeConstraints))
-    return allDerivedRequirements = false;
-
-  // Superclass type constraints.
-  if (superclass && !hasAnyDerivedConstraint(superclassConstraints))
-    return allDerivedRequirements = false;
-
-  // Layout constraints.
-  if (layout && !hasAnyDerivedConstraint(layoutConstraints))
-    return allDerivedRequirements = false;
-
-  // Conformance constraints.
-  for (const auto &conformsToEntry : conformsTo) {
-    if (!hasAnyDerivedConstraint(conformsToEntry.second))
-      return allDerivedRequirements = false;
-  }
-
-  // FIXME: Figure out how same-type constraints fit in.
-
-  return allDerivedRequirements = true;
-}
-
 void EquivalenceClass::dump(llvm::raw_ostream &out) const {
   out << "Equivalence class represented by "
     << members.front()->getRepresentative()->getDebugName() << ":\n";
@@ -2716,8 +2676,7 @@ void GenericSignatureBuilder::PotentialArchetype::dump(llvm::raw_ostream &Out,
 #pragma mark Equivalence classes
 EquivalenceClass::EquivalenceClass(PotentialArchetype *representative)
   : recursiveConcreteType(false), invalidConcreteType(false),
-    recursiveSuperclassType(false), allDerivedRequirements(false),
-    allDerivedRequirementsComputed(false)
+    recursiveSuperclassType(false)
 {
   members.push_back(representative);
 }
@@ -4826,21 +4785,6 @@ void GenericSignatureBuilder::checkConformanceConstraints(
   }
 }
 
-/// Determine whether any ancestors are already in the same equivalence class.
-static bool ancestorsInSameEquivalenceClass(PotentialArchetype *pa1,
-                                            PotentialArchetype *pa2,
-                                            bool skipImmediateParent = true) {
-  PotentialArchetype *parent1 = pa1->getParent();
-  PotentialArchetype *parent2 = pa2->getParent();
-  if (!parent1 || !parent2) return false;
-
-  if (!skipImmediateParent && parent1->isInSameEquivalenceClassAs(parent2))
-    return true;
-
-  return ancestorsInSameEquivalenceClass(parent1, parent2,
-                                         /*skipImmediateParent=*/false);
-}
-
 /// Perform a depth-first search from the given potential archetype through
 /// the *implicit* same-type constraints.
 ///
@@ -4866,22 +4810,6 @@ static PotentialArchetype *sameTypeDFS(PotentialArchetype *pa,
           RequirementSource::NestedTypeNameMatch) {
       // If we're skipping them unconditionally, do so now.
       if (skipNestedTypeNameMatch) continue;
-
-#if false
-      if (constraint.archetype->isInSameEquivalenceClassAs(
-                                         constraint.archetype->getParent()))
-        continue;
-
-      if (constraint.archetype->getResolvedAssociatedType() ==
-            constraint.value->getResolvedAssociatedType() ||
-          constraint.archetype->getParent()->isInSameEquivalenceClassAs(constraint.value->getParent()))
-        continue;
-
-      // Otherwise, skip if they have ancestors in the same equivalence class.
-      if (ancestorsInSameEquivalenceClass(constraint.archetype,
-                                          constraint.value))
-        continue;
-#endif
     }
 
     // Skip non-derived constraints.
@@ -5160,7 +5088,6 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
 
       // Remove derived-via-concrete constraints.
       (void)removeSelfDerived(constraints, /*proto=*/nullptr);
-        anyDerivedViaConcrete = true;
     }
   }
 
@@ -5271,15 +5198,6 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
       connected[edge.target] = true;
     }
   }
-
-#if true
-  // Recompute derived same-type components, this time considering
-  // nested-type-name-match sources.
-  componentOf.clear();
-  equivClass->derivedSameTypeComponents.clear();
-  computeDerivedSameTypeComponents(pa, /*skipNestedTypeNameMatch=*/true,
-                                   componentOf);
-#endif
 }
 
 /// Resolve any unresolved dependent member types using the given builder.

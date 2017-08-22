@@ -190,14 +190,6 @@ public:
     /// the superclass type.
     unsigned recursiveSuperclassType : 1;
 
-    /// Whether all requirements in this equivalence class are derived,
-    /// making the entire equivalence class uninteresting from the perspective
-    /// of requirement generation.
-    mutable unsigned allDerivedRequirements : 1;
-
-    /// Whether \c allDerivedRequirements has been computed.
-    mutable unsigned allDerivedRequirementsComputed : 1;
-
     /// Construct a new equivalence class containing only the given
     /// potential archetype (which represents itself).
     EquivalenceClass(PotentialArchetype *representative);
@@ -222,9 +214,6 @@ public:
     /// Determine whether conformance to the given protocol is satisfied by
     /// a superclass requirement.
     bool isConformanceSatisfiedBySuperclass(ProtocolDecl *proto) const;
-
-    /// Determine whether all requirements
-    bool areAllRequirementsDerived() const;
 
     /// Dump a debugging representation of this equivalence class.
     void dump(llvm::raw_ostream &out) const;
