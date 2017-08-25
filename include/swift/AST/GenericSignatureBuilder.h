@@ -169,11 +169,59 @@ public:
       /// potential archetypes in this component equivalent to the concrete
       /// type.
       const RequirementSource *concreteTypeSource;
+
+      /// Parent in the union-find data structure used to collapsed components
+      /// based on derived nested-type-name-match constraints.
+      unsigned collapsedParent;
+
+      /// Retrieve the representative of the "collapsed" equivalence class.
+      ///
+      /// \p index is the index of the component this is called on.
+      unsigned getCollapsedRepresentative(EquivalenceClass *equivClass,
+                                          unsigned index);
+    };
+
+    /// An edge in the same-type constraint graph that spans two different
+    /// components.
+    struct IntercomponentEdge {
+      unsigned source;
+      unsigned target;
+      Constraint<PotentialArchetype *> constraint;
+
+      enum class DerivedState {
+        Unresolved,
+        Derived,
+        NotDerived,
+        Computing,
+      } derived;
+
+      IntercomponentEdge(unsigned source, unsigned target,
+                         const Constraint<PotentialArchetype *> &constraint);
+
+
+      friend bool operator<(const IntercomponentEdge &lhs,
+                            const IntercomponentEdge &rhs);
     };
 
     /// The set of connected components within this equivalence class, using
     /// only the derived same-type constraints in the graph.
     std::vector<DerivedSameTypeComponent> derivedSameTypeComponents;
+
+    /// Mapping from the potential archetypes within this equivalence class
+    /// to the component of that potential archetype in
+    /// \c derivedSameTypeComponents.
+    ///
+    /// FIXME: This should be in temporary storage somehow.
+    llvm::SmallDenseMap<PotentialArchetype *, unsigned>
+      derivedSameTypeComponentOf;
+
+    /// Edges between the components of the same-type graph.
+    ///
+    /// FIXME: This should be in temporary storage somehow.
+    std::vector<IntercomponentEdge> derivedIntercomponentEdges;
+
+    /// THe next derived intercomponent edge to proess.
+    unsigned nextDerivedIntercomponentEdge = 0;
 
     /// Delayed requirements that could be resolved by a change to this
     /// equivalence class.
@@ -214,6 +262,14 @@ public:
     /// Determine whether conformance to the given protocol is satisfied by
     /// a superclass requirement.
     bool isConformanceSatisfiedBySuperclass(ProtocolDecl *proto) const;
+
+    /// Resolve the intercomponent edges.
+    ///
+    /// Returns \c true if anything was newly-collapsed.
+    bool resolveIntercomponentEdges();
+
+    /// Collapse the derived intercomponent edges.
+    void collapseIntercomponentEdges();
 
     /// Dump a debugging representation of this equivalence class.
     void dump(llvm::raw_ostream &out) const;
@@ -662,6 +718,14 @@ private:
   void checkSameTypeConstraints(
                             ArrayRef<GenericTypeParamType *> genericParams,
                             PotentialArchetype *pa);
+
+  /// Collapse any nested type-name match constraints that are determined to
+  /// be derived from other constraints.
+  void collapseNestedTypeNameMatchConstraints(EquivalenceClass *equivClass);
+
+  /// Collapse any nested type-name match constraints that are determined to
+  /// be derived from other constraints.
+  void collapseAllNestedTypeNameMatchConstraints();
 
   /// \brief Resolve the given type to the potential archetype it names.
   ///

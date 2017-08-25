@@ -4904,7 +4904,7 @@ static void computeDerivedSameTypeComponents(
                               componentOf);
 
     // Record the anchor.
-    components.push_back({anchor, nullptr});
+    components.push_back({anchor, nullptr, (unsigned)components.size()});
   }
 
   // If there is a concrete type, figure out the best concrete type anchor
@@ -4935,43 +4935,43 @@ static void computeDerivedSameTypeComponents(
   llvm::array_pod_sort(components.begin(), components.end());
 }
 
-namespace {
-  /// An edge in the same-type constraint graph that spans two different
-  /// components.
-  struct IntercomponentEdge {
-    unsigned source;
-    unsigned target;
-    Constraint<PotentialArchetype *> constraint;
-
-    IntercomponentEdge(unsigned source, unsigned target,
+namespace swift {
+  EquivalenceClass::IntercomponentEdge::IntercomponentEdge(
+                       unsigned source, unsigned target,
                        const Constraint<PotentialArchetype *> &constraint)
-      : source(source), target(target), constraint(constraint)
-    {
-      assert(source != target && "Not an intercomponent edge");
-      if (this->source > this->target) std::swap(this->source, this->target);
-    }
+    : source(source), target(target), constraint(constraint)
+  {
+    assert(source != target && "Not an intercomponent edge");
+    if (this->source > this->target) std::swap(this->source, this->target);
 
-    friend bool operator<(const IntercomponentEdge &lhs,
-                          const IntercomponentEdge &rhs) {
-      if (lhs.source != rhs.source)
-        return lhs.source < rhs.source;
-      if (lhs.target != rhs.target)
-        return lhs.target < rhs.target;
+    bool isNestedTypeNameMatch =
+      constraint.source->kind == RequirementSource::NestedTypeNameMatch;
 
-      // Prefer non-inferred requirement sources.
-      bool lhsIsInferred =
-        lhs.constraint.source->isInferredRequirement(
-          /*includeQuietInferred=*/false);
-      bool rhsIsInferred =
-        rhs.constraint.source->isInferredRequirement(
-          /*includeQuietInferred=*/false);
-      if (lhsIsInferred != rhsIsInferred)
-        return rhsIsInferred;;
+    derived = isNestedTypeNameMatch ? DerivedState::Unresolved
+            : constraint.source->isDerivedRequirement() ? DerivedState::Derived
+            : DerivedState::NotDerived;
+  }
 
-      return lhs.constraint < rhs.constraint;
-    }
-  };
-} // end anonymous namespace
+  bool operator<(const EquivalenceClass::IntercomponentEdge &lhs,
+                 const EquivalenceClass::IntercomponentEdge &rhs) {
+    if (lhs.source != rhs.source)
+      return lhs.source < rhs.source;
+    if (lhs.target != rhs.target)
+      return lhs.target < rhs.target;
+
+    // Prefer non-inferred requirement sources.
+    bool lhsIsInferred =
+      lhs.constraint.source->isInferredRequirement(
+        /*includeQuietInferred=*/false);
+    bool rhsIsInferred =
+      rhs.constraint.source->isInferredRequirement(
+        /*includeQuietInferred=*/false);
+    if (lhsIsInferred != rhsIsInferred)
+      return rhsIsInferred;;
+
+    return lhs.constraint < rhs.constraint;
+  }
+}
 
 void GenericSignatureBuilder::checkSameTypeConstraints(
                           ArrayRef<GenericTypeParamType *> genericParams,
@@ -5005,7 +5005,7 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
 
   // Compute the components in the subgraph of the same-type constraint graph
   // that includes only derived constraints.
-  llvm::SmallDenseMap<PotentialArchetype *, unsigned> componentOf;
+  auto &componentOf = equivClass->derivedSameTypeComponentOf;
   computeDerivedSameTypeComponents(pa, /*skipNestedTypeNameMatch=*/true,
                                    componentOf);
 
@@ -5022,7 +5022,8 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
 
   // Intercomponent edges are stored as one big list, which tracks the
   // source/target components.
-  std::vector<IntercomponentEdge> intercomponentEdges;
+  using IntercomponentEdge = EquivalenceClass::IntercomponentEdge;
+  auto &intercomponentEdges = equivClass->derivedIntercomponentEdges;
   SmallVector<std::pair<unsigned, unsigned>, 2> nestedTypeNameMatchEdges;
   for (auto &entry : equivClass->sameTypeConstraints) {
     auto &constraints = entry.second;
@@ -5198,6 +5199,114 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
       connected[edge.target] = true;
     }
   }
+}
+
+unsigned EquivalenceClass::DerivedSameTypeComponent::getCollapsedRepresentative(
+                                              EquivalenceClass *equivClass,
+                                              unsigned index) {
+  if (collapsedParent == index) return index;
+
+  return collapsedParent =
+    equivClass->derivedSameTypeComponents[collapsedParent]
+      .getCollapsedRepresentative(equivClass, collapsedParent);
+}
+
+/// Determine whether the given potential archetypes are connected using
+/// only derived edges.
+static bool isConnectedIntercomponent(PotentialArchetype *from,
+                                      PotentialArchetype *to) {
+  if (from == to) return true;
+
+  auto equivClass = from->getOrCreateEquivalenceClass();
+  assert(from->isInSameEquivalenceClassAs(to));
+
+  // Which component are "from" and "to" in within the intercomponent edges?
+  assert(equivClass->derivedSameTypeComponentOf.count(from) > 0);
+  auto fromComponentIndex = equivClass->derivedSameTypeComponentOf[from];
+  assert(equivClass->derivedSameTypeComponentOf.count(to) > 0);
+  auto toComponentIndex = equivClass->derivedSameTypeComponentOf[to];
+
+  // Are they in the same component already?
+  if (fromComponentIndex == toComponentIndex) return true;
+
+  // Are they in the same collapsed equivalence class already?
+  auto &fromComponent =
+    equivClass->derivedSameTypeComponents[fromComponentIndex];
+  auto &toComponent =
+    equivClass->derivedSameTypeComponents[toComponentIndex];
+  if (fromComponent.getCollapsedRepresentative(equivClass, fromComponentIndex)
+        == toComponent.getCollapsedRepresentative(equivClass, toComponentIndex))
+    return true;
+
+  // Resolve any remaining intercomponent edges and check again.
+  return equivClass->resolveIntercomponentEdges() &&
+    fromComponent.getCollapsedRepresentative(equivClass, fromComponentIndex)
+      == toComponent.getCollapsedRepresentative(equivClass, toComponentIndex);
+}
+
+bool EquivalenceClass::resolveIntercomponentEdges() {
+  unsigned numIntercomponentEdges = derivedIntercomponentEdges.size();
+  bool anyCollapsed = false;
+  while (nextDerivedIntercomponentEdge < numIntercomponentEdges) {
+    auto &edge = derivedIntercomponentEdges[nextDerivedIntercomponentEdge++];
+    switch (edge.derived) {
+    case IntercomponentEdge::DerivedState::Derived:
+    case IntercomponentEdge::DerivedState::NotDerived:
+    case IntercomponentEdge::DerivedState::Computing:
+      continue;
+
+    case IntercomponentEdge::DerivedState::Unresolved:
+      break;
+    }
+
+    // Check whether the parents are connected, without considering this edge.
+    edge.derived = IntercomponentEdge::DerivedState::Computing;
+    if (isConnectedIntercomponent(edge.constraint.archetype->getParent(),
+                                  edge.constraint.value->getParent())) {
+      edge.derived = IntercomponentEdge::DerivedState::Derived;
+
+      // Collapse the derived same-type components.
+      auto &sourceComponent = derivedSameTypeComponents[edge.source];
+      auto &targetComponent = derivedSameTypeComponents[edge.target];
+
+      if (sourceComponent.collapsedParent != targetComponent.collapsedParent) {
+        unsigned newParent =
+            std::min(sourceComponent.collapsedParent,
+                     targetComponent.collapsedParent);
+
+        sourceComponent.collapsedParent = newParent;
+        targetComponent.collapsedParent = newParent;
+
+        // Note that we collapsed something.
+        anyCollapsed = true;
+      }
+    } else {
+      edge.derived = IntercomponentEdge::DerivedState::NotDerived;
+    }
+  }
+
+  return anyCollapsed;
+}
+
+void EquivalenceClass::collapseIntercomponentEdges() {
+fixme build a new set of derived components by collapsing the existing once
+}
+
+void GenericSignatureBuilder::collapseAllNestedTypeNameMatchConstraints() {
+  // Compute the derivation status of nested type-name-match constraints.
+  visitPotentialArchetypes([&](PotentialArchetype *pa) {
+    if (pa->getRepresentative() == pa) {
+      if (auto equivClass = pa->getEquivalenceClassIfPresent())
+        equivClass->resolveIntercomponentEdges();
+    }
+  });
+
+  visitPotentialArchetypes([&](PotentialArchetype *pa) {
+    if (pa->getRepresentative() == pa) {
+      if (auto equivClass = pa->getEquivalenceClassIfPresent())
+        equivClass->collapseIntercomponentEdges();
+    }
+  });
 }
 
 /// Resolve any unresolved dependent member types using the given builder.
