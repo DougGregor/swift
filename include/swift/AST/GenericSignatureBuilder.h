@@ -721,10 +721,6 @@ private:
 
   /// Collapse any nested type-name match constraints that are determined to
   /// be derived from other constraints.
-  void collapseNestedTypeNameMatchConstraints(EquivalenceClass *equivClass);
-
-  /// Collapse any nested type-name match constraints that are determined to
-  /// be derived from other constraints.
   void collapseAllNestedTypeNameMatchConstraints();
 
   /// \brief Resolve the given type to the potential archetype it names.

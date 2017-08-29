@@ -4317,6 +4317,8 @@ GenericSignatureBuilder::finalize(SourceLoc loc,
     checkSameTypeConstraints(genericParams, archetype);
   });
 
+  collapseAllNestedTypeNameMatchConstraints();
+
   // Check for generic parameters which have been made concrete or equated
   // with each other.
   if (!allowConcreteGenericParams) {
@@ -4933,6 +4935,8 @@ static void computeDerivedSameTypeComponents(
 
   // Sort the components.
   llvm::array_pod_sort(components.begin(), components.end());
+  for (auto index : indices(components))
+    components[index].collapsedParent = index;
 }
 
 namespace swift {
@@ -5024,15 +5028,10 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
   // source/target components.
   using IntercomponentEdge = EquivalenceClass::IntercomponentEdge;
   auto &intercomponentEdges = equivClass->derivedIntercomponentEdges;
-  SmallVector<std::pair<unsigned, unsigned>, 2> nestedTypeNameMatchEdges;
+  SmallVector<IntercomponentEdge, 2> nestedTypeNameMatchEdges;
   for (auto &entry : equivClass->sameTypeConstraints) {
     auto &constraints = entry.second;
     for (const auto &constraint : constraints) {
-      // Skip nested-type-name-match constraints.
-      if (constraint.source->getRoot()->kind ==
-            RequirementSource::NestedTypeNameMatch)
-        continue;
-
       // If the source/destination are identical, complain.
       if (constraint.archetype == constraint.value) {
         if (!constraint.source->isDerivedRequirement() &&
@@ -5063,6 +5062,18 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
       assert(componentOf.count(constraint.value) > 0 &&
              "unknown potential archetype?");
       unsigned secondComponent = componentOf[constraint.value];
+
+      // Separately track nested-type-name-match constraints.
+      if (constraint.source->getRoot()->kind ==
+            RequirementSource::NestedTypeNameMatch) {
+        // If this is an intercomponent edge, record it separately.
+        if (firstComponent != secondComponent) {
+          nestedTypeNameMatchEdges.push_back(
+            IntercomponentEdge(firstComponent, secondComponent, constraint));
+        }
+
+        continue;
+      }
 
       // If both vertices are within the same component, this is an
       // intra-component edge. Record it as such.
@@ -5199,6 +5210,12 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
       connected[edge.target] = true;
     }
   }
+
+  // Add the nested-type-name-match edges to the list of intercomponent
+  // edges; these will be used to collapse the components later.
+  intercomponentEdges.insert(intercomponentEdges.end(),
+                             nestedTypeNameMatchEdges.begin(),
+                             nestedTypeNameMatchEdges.end());
 }
 
 unsigned EquivalenceClass::DerivedSameTypeComponent::getCollapsedRepresentative(
@@ -5270,12 +5287,10 @@ bool EquivalenceClass::resolveIntercomponentEdges() {
       auto &targetComponent = derivedSameTypeComponents[edge.target];
 
       if (sourceComponent.collapsedParent != targetComponent.collapsedParent) {
-        unsigned newParent =
-            std::min(sourceComponent.collapsedParent,
-                     targetComponent.collapsedParent);
-
-        sourceComponent.collapsedParent = newParent;
-        targetComponent.collapsedParent = newParent;
+        if (sourceComponent.collapsedParent < targetComponent.collapsedParent)
+          targetComponent.collapsedParent = edge.source;
+        else
+          sourceComponent.collapsedParent = edge.target;
 
         // Note that we collapsed something.
         anyCollapsed = true;
@@ -5289,7 +5304,52 @@ bool EquivalenceClass::resolveIntercomponentEdges() {
 }
 
 void EquivalenceClass::collapseIntercomponentEdges() {
-fixme build a new set of derived components by collapsing the existing once
+  std::vector<DerivedSameTypeComponent> newComponents;
+  unsigned maxComponents = derivedSameTypeComponents.size();
+  std::vector<unsigned> newIndices(maxComponents, maxComponents);
+
+  for (unsigned oldIndex : range(0, maxComponents)) {
+    auto &oldComponent = derivedSameTypeComponents[oldIndex];
+    unsigned oldRepresentativeIndex =
+      oldComponent.getCollapsedRepresentative(this, oldIndex);
+
+    // If this is the representative, it's a new component; record it.
+    if (oldRepresentativeIndex == oldIndex) {
+      assert(newIndices[oldIndex] == maxComponents &&
+             "Already saw this component?");
+      unsigned newIndex = newComponents.size();
+      newIndices[oldIndex] = newIndex;
+      newComponents.push_back(
+        {oldComponent.anchor, oldComponent.concreteTypeSource, newIndex});
+      continue;
+    }
+
+    // This is not the representative; merge it into the representative
+    // component.
+    auto newRepresentativeIndex = newIndices[oldRepresentativeIndex];
+    assert(newRepresentativeIndex != maxComponents &&
+           "Representative should have come earlier");
+    auto &newComponent = newComponents[newRepresentativeIndex];
+
+    // If the old component has a better anchor, keep it.
+    if (compareDependentTypes(&oldComponent.anchor, &newComponent.anchor) < 0)
+      newComponent.anchor = oldComponent.anchor;
+
+    // If the old component has a better concrete type source, keep it.
+    if (!newComponent.concreteTypeSource ||
+        (oldComponent.concreteTypeSource &&
+         oldComponent.concreteTypeSource
+           ->compare(newComponent.concreteTypeSource) < 0))
+      newComponent.concreteTypeSource = oldComponent.concreteTypeSource;
+  }
+
+  // Move the new results into place.
+  derivedSameTypeComponents = std::move(newComponents);
+
+  // Clear out state related to collapsing intercomponent edges.
+  derivedSameTypeComponentOf.clear();
+  derivedIntercomponentEdges.clear();
+  nextDerivedIntercomponentEdge = 0;
 }
 
 void GenericSignatureBuilder::collapseAllNestedTypeNameMatchConstraints() {
