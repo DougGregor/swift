@@ -170,15 +170,21 @@ public:
       /// type.
       const RequirementSource *concreteTypeSource;
 
+      /// Parent in the union-find data structure used to describe the
+      /// connected components based on non-derived, non-type-name-match
+      /// constraints.
+      unsigned explicitParent;
+
       /// Parent in the union-find data structure used to collapsed components
       /// based on derived nested-type-name-match constraints.
       unsigned collapsedParent;
 
-      /// Retrieve the representative of the "collapsed" equivalence class.
-      ///
-      /// \p index is the index of the component this is called on.
-      unsigned getCollapsedRepresentative(EquivalenceClass *equivClass,
-                                          unsigned index);
+      /// Form a new derived same-type component.
+      DerivedSameTypeComponent(PotentialArchetype *anchor,
+                               const RequirementSource *concreteTypeSource,
+                               unsigned index)
+        : anchor(anchor), concreteTypeSource(concreteTypeSource),
+          explicitParent(index), collapsedParent(index) { }
     };
 
     /// An edge in the same-type constraint graph that spans two different
@@ -215,13 +221,14 @@ public:
     llvm::SmallDenseMap<PotentialArchetype *, unsigned>
       derivedSameTypeComponentOf;
 
-    /// Edges between the components of the same-type graph.
+    /// Nested-same-type-constraint edges between the components of the
+    /// same-type graph.
     ///
     /// FIXME: This should be in temporary storage somehow.
-    std::vector<IntercomponentEdge> derivedIntercomponentEdges;
+    std::vector<IntercomponentEdge> nestedIntercomponentSameTypeEdges;
 
-    /// THe next derived intercomponent edge to proess.
-    unsigned nextDerivedIntercomponentEdge = 0;
+    /// The next nested intercomponent same-typeedge to proess.
+    unsigned nextNestedIntercomponentSameTypeEdge = 0;
 
     /// Delayed requirements that could be resolved by a change to this
     /// equivalence class.
@@ -262,6 +269,27 @@ public:
     /// Determine whether conformance to the given protocol is satisfied by
     /// a superclass requirement.
     bool isConformanceSatisfiedBySuperclass(ProtocolDecl *proto) const;
+
+    /// Find the representative of a union-find data structure laid on
+    /// top of the derived same-type components graph.
+    ///
+    /// \param index The index of the component into
+    /// \c derivedSameTypeComponents.
+    ///
+    /// \param parentPtr Member pointer used to access the "parent" field in
+    /// the union-find data structure.
+    unsigned findSameTypeRepresentative(
+                             unsigned index,
+                             unsigned DerivedSameTypeComponent::* parentPtr);
+
+    /// Union the same-type components noted that \c index1 and \c index2,
+    /// using the parent pointer described by \c parentPtr.
+    ///
+    /// \returns true if the two components were separate and have now
+    /// been joined.
+    bool unionSameTypeComponents(
+                             unsigned index1, unsigned index2,
+                             unsigned DerivedSameTypeComponent::* parentPtr);
 
     /// Resolve the intercomponent edges.
     ///
