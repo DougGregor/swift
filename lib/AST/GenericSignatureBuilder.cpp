@@ -4987,6 +4987,7 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
   }
   equivClass = pa->getEquivalenceClassIfPresent();
   assert(equivClass && "Equivalence class disappeared?");
+  equivClass->derivedSameTypeComponentOf.clear();
 
   bool anyDerivedViaConcrete = false;
   for (auto &entry : equivClass->sameTypeConstraints) {
