@@ -204,6 +204,7 @@ public:
       IntercomponentEdge(unsigned source, unsigned target,
                          const Constraint<PotentialArchetype *> &constraint);
 
+      bool isDerived() const { return derived == DerivedState::Derived; }
 
       friend bool operator<(const IntercomponentEdge &lhs,
                             const IntercomponentEdge &rhs);
