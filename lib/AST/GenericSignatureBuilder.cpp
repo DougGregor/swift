@@ -4932,13 +4932,6 @@ static void computeDerivedSameTypeComponents(
         concrete.source->compare(bestConcreteTypeSource) < 0)
       bestConcreteTypeSource = concrete.source;
   }
-
-  // Sort the components.
-  llvm::array_pod_sort(components.begin(), components.end());
-  for (auto index : indices(components)) {
-    components[index].collapsedParent = index;
-    components[index].explicitParent = index;
-  }
 }
 
 namespace swift {
@@ -5517,6 +5510,10 @@ void EquivalenceClass::collapseIntercomponentEdges() {
 
   // Move the new results into place.
   derivedSameTypeComponents = std::move(newComponents);
+
+  // Sort the components.
+  llvm::array_pod_sort(derivedSameTypeComponents.begin(),
+                       derivedSameTypeComponents.end());
 
   // Clear out state related to collapsing intercomponent edges.
   derivedSameTypeComponentOf.clear();
