@@ -170,7 +170,7 @@ public:
       /// type.
       const RequirementSource *concreteTypeSource;
 
-      /// Parent in the union-find data structure used to collapsed components
+      /// Parent in the union-find data structure used to collapse components
       /// based on derived nested-type-name-match constraints.
       unsigned collapsedParent;
 
@@ -194,6 +194,9 @@ public:
 
       friend bool operator<(const IntercomponentEdge &lhs,
                             const IntercomponentEdge &rhs);
+
+      LLVM_ATTRIBUTE_DEPRECATED(void dump() const,
+                                "only for use in the debugger");
     };
 
     /// The set of connected components within this equivalence class, using
