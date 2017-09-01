@@ -170,11 +170,6 @@ public:
       /// type.
       const RequirementSource *concreteTypeSource;
 
-      /// Parent in the union-find data structure used to describe the
-      /// connected components based on non-derived, non-type-name-match
-      /// constraints.
-      unsigned explicitParent;
-
       /// Parent in the union-find data structure used to collapsed components
       /// based on derived nested-type-name-match constraints.
       unsigned collapsedParent;
@@ -184,7 +179,7 @@ public:
                                const RequirementSource *concreteTypeSource,
                                unsigned index)
         : anchor(anchor), concreteTypeSource(concreteTypeSource),
-          explicitParent(index), collapsedParent(index) { }
+          collapsedParent(index) { }
     };
 
     /// An edge in the same-type constraint graph that spans two different
@@ -194,17 +189,8 @@ public:
       unsigned target;
       Constraint<PotentialArchetype *> constraint;
 
-      enum class DerivedState {
-        Unresolved,
-        Derived,
-        NotDerived,
-        Computing,
-      } derived;
-
       IntercomponentEdge(unsigned source, unsigned target,
                          const Constraint<PotentialArchetype *> &constraint);
-
-      bool isDerived() const { return derived == DerivedState::Derived; }
 
       friend bool operator<(const IntercomponentEdge &lhs,
                             const IntercomponentEdge &rhs);
@@ -227,9 +213,6 @@ public:
     ///
     /// FIXME: This should be in temporary storage somehow.
     std::vector<IntercomponentEdge> nestedIntercomponentSameTypeEdges;
-
-    /// The next nested intercomponent same-typeedge to proess.
-    unsigned nextNestedIntercomponentSameTypeEdge = 0;
 
     /// Delayed requirements that could be resolved by a change to this
     /// equivalence class.
@@ -293,9 +276,7 @@ public:
                              unsigned DerivedSameTypeComponent::* parentPtr);
 
     /// Resolve the intercomponent edges.
-    ///
-    /// Returns \c true if anything was newly-collapsed.
-    bool resolveIntercomponentEdges();
+    void resolveIntercomponentEdges();
 
     /// Collapse the derived intercomponent edges.
     void collapseIntercomponentEdges();
