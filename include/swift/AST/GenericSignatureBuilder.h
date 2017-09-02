@@ -211,6 +211,9 @@ public:
     llvm::SmallDenseMap<PotentialArchetype *, unsigned>
       derivedSameTypeComponentOf;
 
+    /// FIXME: Intercomponent edges.
+    std::vector<IntercomponentEdge> intercomponentEdges;
+
     /// Nested-same-type-constraint edges between the components of the
     /// same-type graph.
     ///

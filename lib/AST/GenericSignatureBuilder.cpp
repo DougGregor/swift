@@ -5023,7 +5023,7 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
   // Intercomponent edges are stored as one big list, which tracks the
   // source/target components.
   using IntercomponentEdge = EquivalenceClass::IntercomponentEdge;
-  std::vector<IntercomponentEdge> intercomponentEdges;
+  auto &intercomponentEdges = equivClass->intercomponentEdges;
   auto &nestedTypeNameMatchEdges =
     equivClass->nestedIntercomponentSameTypeEdges;
   for (auto &entry : equivClass->sameTypeConstraints) {
@@ -5237,45 +5237,35 @@ bool EquivalenceClass::unionSameTypeComponents(
 }
 
 namespace {
-  using IgnoredEdges =
-    llvm::SmallDenseMap<EquivalenceClass *, std::vector<unsigned>>;
+  using IgnoredEdges = llvm::SmallVector<unsigned, 4>;
 
   /// Determine whether the given edge is in the set of edges to ignore.
-  bool shouldIgnoreEdge(EquivalenceClass *equivClass, unsigned edgeIndex,
-                        const IgnoredEdges &ignoredEdges) {
-    auto knownEquivClass = ignoredEdges.find(equivClass);
-    if (knownEquivClass == ignoredEdges.end())
-      return false;
-
-    return std::find(knownEquivClass->second.begin(),
-                     knownEquivClass->second.end(),
-                     edgeIndex) != knownEquivClass->second.end();
+  bool shouldIgnoreEdge(unsigned edgeIndex, const IgnoredEdges &ignoredEdges) {
+    return std::find(ignoredEdges.begin(), ignoredEdges.end(), edgeIndex)
+      != ignoredEdges.end();
   }
 }
 
 static bool isSelfDerivedViaParents(PotentialArchetype *from,
                                     PotentialArchetype *to,
-                                    IgnoredEdges &ignoredEdges,
-                                    bool outermost);
+                                    EquivalenceClass *rootEquivClass,
+                                    IgnoredEdges &ignoredEdges);
 
 /// Determine whether the the given nested-type-name edge, described by the
 /// \c edgeIndex into \c equivClass, should be considered "derived".
-static bool isSelfDerivedNestedTypeNameMatchEdge(EquivalenceClass *equivClass,
-                                                 unsigned edgeIndex,
-                                                 IgnoredEdges &ignoredEdges,
-                                                 bool outermost = true) {
-  assert(!shouldIgnoreEdge(equivClass, edgeIndex, ignoredEdges));
+static bool isSelfDerivedNestedTypeNameMatchEdge(
+                                             EquivalenceClass *equivClass,
+                                             unsigned edgeIndex,
+                                             EquivalenceClass *rootEquivClass,
+                                             IgnoredEdges &ignoredEdges) {
+  assert(!shouldIgnoreEdge(edgeIndex, ignoredEdges));
 
   // Record this edge in the list of edges to ignore, and remove it when
   // we're done.
-  ignoredEdges[equivClass].push_back(edgeIndex);
+  ignoredEdges.push_back(edgeIndex);
   SWIFT_DEFER {
-    auto known = ignoredEdges.find(equivClass);
-    assert(known != ignoredEdges.end());
-    assert(known->second.back() == edgeIndex);
-    known->second.pop_back();
-    if (known->second.empty())
-      ignoredEdges.erase(known);
+    assert(ignoredEdges.back() == edgeIndex);
+    ignoredEdges.pop_back();
   };
 
   // If the parents are connected (ignoring the set of edges depending on it),
@@ -5283,7 +5273,7 @@ static bool isSelfDerivedNestedTypeNameMatchEdge(EquivalenceClass *equivClass,
   auto &edge = equivClass->nestedIntercomponentSameTypeEdges[edgeIndex];
   return isSelfDerivedViaParents(edge.constraint.archetype->getParent(),
                                  edge.constraint.value->getParent(),
-                                 ignoredEdges, outermost);
+                                 rootEquivClass, ignoredEdges);
 }
 
 /// Determine whether the two given potential archetypes are connected via
@@ -5291,8 +5281,8 @@ static bool isSelfDerivedNestedTypeNameMatchEdge(EquivalenceClass *equivClass,
 /// connectedness.
 bool isSelfDerivedViaParents(PotentialArchetype *from,
                              PotentialArchetype *to,
-                             IgnoredEdges &ignoredEdges,
-                             bool outermost) {
+                             EquivalenceClass *rootEquivClass,
+                             IgnoredEdges &ignoredEdges) {
   auto equivClass = from->getOrCreateEquivalenceClass();
   assert(from->isInSameEquivalenceClassAs(to));
 
@@ -5305,6 +5295,26 @@ bool isSelfDerivedViaParents(PotentialArchetype *from,
   // If they're in the same component, they're always connected (due to
   // derived edges).
   if (fromComponentIndex == toComponentIndex) return false;
+
+  // If this isn't the root equivalence class, recurse to see whether all
+  // edges lead to self-derived edges.
+  if (equivClass != rootEquivClass) {
+    for (const auto &edge : equivClass->nestedIntercomponentSameTypeEdges) {
+#if false
+      /// FIXME:
+      the question to ask here is... do I need the root equivalence class to
+      make the parents equivalent?
+#endif
+
+      if (!isSelfDerivedViaParents(edge.constraint.archetype->getParent(),
+                                   edge.constraint.value->getParent(),
+                                   rootEquivClass, ignoredEdges))
+        return false;
+    }
+
+    // All paths were self-derived in the root.
+    return true;
+  }
 
   // Set up a union-find algorithm to check connectedness within the component.
   std::vector<unsigned> parents;
@@ -5335,27 +5345,20 @@ bool isSelfDerivedViaParents(PotentialArchetype *from,
 
   // Compute connected components based on connected nested-type-name-match
   // edges.
-  bool anyAreSelfDerived = false;
-  bool allAreSelfDerived = true;
+  IgnoredEdges allIgnoredEdges;
   for (unsigned edgeIndex :
          indices(equivClass->nestedIntercomponentSameTypeEdges)) {
     // If we're supposed to ignore this edge, do so.
-    if (shouldIgnoreEdge(equivClass, edgeIndex, ignoredEdges)) {
-      allAreSelfDerived = false;
+    if (shouldIgnoreEdge(edgeIndex, ignoredEdges)) {
       continue;
     }
 
-#if true
     // If this edge is self-derived, skip it.
     if (isSelfDerivedNestedTypeNameMatchEdge(equivClass, edgeIndex,
-                                             ignoredEdges,
-                                             /*outermost=*/false)) {
-      anyAreSelfDerived = true;
+                                             rootEquivClass, ignoredEdges)) {
+      allIgnoredEdges.push_back(edgeIndex);
       continue;
     }
-#endif
-
-    allAreSelfDerived = false;
 
     // Merge the two equivalence classes. If there was a change, check
     // whether the from/to components got merged. If that happened, then
@@ -5363,30 +5366,106 @@ bool isSelfDerivedViaParents(PotentialArchetype *from,
     const auto &edge = equivClass->nestedIntercomponentSameTypeEdges[edgeIndex];
     if (unionSets(edge.source, edge.target) &&
         getRepresentative(fromComponentIndex) ==
+          getRepresentative(toComponentIndex)) {
+      return false;
+    }
+  }
+
+  // Check whether adding any of the ignored edges would make put the parents
+  // in the same component. If so, this is a self-derived edge.
+  allIgnoredEdges.append(ignoredEdges.begin(), ignoredEdges.end());
+  for (const auto &ignoredEdge : allIgnoredEdges) {
+    const auto &edge =
+      equivClass->nestedIntercomponentSameTypeEdges[ignoredEdge];
+    if (unionSets(edge.source, edge.target) &&
+        getRepresentative(fromComponentIndex) ==
+          getRepresentative(toComponentIndex))
+      return true;
+  }
+
+  // This edge will depend on an explicit edge, therefore it is derived.
+  return false;
+}
+
+static bool removalDisconnectsEquivalenceClass(EquivalenceClass *equivClass,
+                                               unsigned edgeIndex,
+                                               PotentialArchetype *from,
+                                               PotentialArchetype *to) {
+  // Which component are "from" and "to" in within the intercomponent edges?
+  assert(equivClass->derivedSameTypeComponentOf.count(from) > 0);
+  auto fromComponentIndex = equivClass->derivedSameTypeComponentOf[from];
+  assert(equivClass->derivedSameTypeComponentOf.count(to) > 0);
+  auto toComponentIndex = equivClass->derivedSameTypeComponentOf[to];
+
+  // If they're in the same component, they're always connected (due to
+  // derived edges).
+  if (fromComponentIndex == toComponentIndex) return false;
+
+  std::vector<unsigned> parents;
+  for (unsigned i : range(equivClass->derivedSameTypeComponents.size())) {
+    parents.push_back(i);
+  }
+  std::function<unsigned(unsigned)> getRepresentative;
+  getRepresentative = [&](unsigned index) {
+    if (parents[index] == index) return index;
+    return parents[index] = getRepresentative(parents[index]);
+  };
+
+  // Union the two sets.
+  //
+  // Returns \c true if the sets were initially distinct, \c false otherwise.
+  auto unionSets = [&](unsigned x, unsigned y) {
+    unsigned xRep = getRepresentative(x);
+    unsigned yRep = getRepresentative(y);
+    if (xRep < yRep)
+      parents[yRep] = xRep;
+    else if (xRep > yRep)
+      parents[xRep] = yRep;
+    else
+      return false;
+
+    return true;
+  };
+
+  for (const auto existingEdgeIndex
+         : indices(equivClass->nestedIntercomponentSameTypeEdges)) {
+    if (existingEdgeIndex == edgeIndex) continue;
+
+    const auto &edge =
+      equivClass->nestedIntercomponentSameTypeEdges[existingEdgeIndex];
+    if (unionSets(edge.source, edge.target) &&
+        getRepresentative(fromComponentIndex) ==
           getRepresentative(toComponentIndex))
       return false;
   }
 
-#if true
-  if (allAreSelfDerived && anyAreSelfDerived)
-    return true;
-#endif
+  const auto &edge =
+    equivClass->nestedIntercomponentSameTypeEdges[edgeIndex];
 
-  // Check whether adding any of the ignored edges would make put the parents
-  // in the same component. If so, this is a self-derived edge.
-  auto knownIgnoredEdges = ignoredEdges.find(equivClass);
-  if (knownIgnoredEdges != ignoredEdges.end()) {
-    for (auto edgeIndex : knownIgnoredEdges->second) {
-      const auto &edge =
-        equivClass->nestedIntercomponentSameTypeEdges[edgeIndex];
-      if (unionSets(edge.source, edge.target) &&
-          getRepresentative(fromComponentIndex) ==
-            getRepresentative(toComponentIndex))
-        return true;
-    }
+  return !unionSets(edge.source, edge.target) ||
+  getRepresentative(fromComponentIndex) !=
+  getRepresentative(toComponentIndex);
+}
+
+static bool isSelfDerivedNestedTypeNameMatchEdgeSimple(
+                                                 EquivalenceClass *equivClass,
+                                                 unsigned edgeIndex) {
+  const auto &edge = equivClass->nestedIntercomponentSameTypeEdges[edgeIndex];
+  PotentialArchetype *source = edge.constraint.archetype;
+  PotentialArchetype *target = edge.constraint.value;
+  while (source->getParent() && target->getParent() &&
+         source->getResolvedAssociatedType() ==
+           target->getResolvedAssociatedType()) {
+    source = source->getParent();
+    target = target->getParent();
+
+    if (source->isInSameEquivalenceClassAs(target) &&
+        source->getEquivalenceClassIfPresent() == equivClass &&
+        !removalDisconnectsEquivalenceClass(equivClass, edgeIndex,
+                                            source, target))
+      return true;
   }
 
-  // This edge will depend on an explicit edge, therefore it is derived.
   return false;
 }
 
@@ -5396,7 +5475,7 @@ void EquivalenceClass::resolveIntercomponentEdges() {
     const auto &edge = nestedIntercomponentSameTypeEdges[edgeIndex];
 
     // If this edge is self-derived, remove it.
-    if (isSelfDerivedNestedTypeNameMatchEdge(this, edgeIndex, ignoredEdges)) {
+    if (isSelfDerivedNestedTypeNameMatchEdgeSimple(this, edgeIndex)) {
       auto eraseConstraint = [&](PotentialArchetype *archetype) {
         auto &constraints = sameTypeConstraints[archetype];
         auto known =
