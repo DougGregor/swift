@@ -131,6 +131,10 @@ struct GenericSignatureBuilder::Implementation {
 #ifndef NDEBUG
   /// Whether we've already finalized the builder.
   bool finalized = false;
+
+  /// # of potential archetypes active, which is used for rudimentary leak
+  /// detection.
+  unsigned NumPotentialArchetypesActive = 0;
 #endif
 };
 
@@ -1473,8 +1477,44 @@ bool FloatingRequirementSource::isRecursive(
   return false;
 }
 
-GenericSignatureBuilder::PotentialArchetype::~PotentialArchetype() {
+PotentialArchetype::PotentialArchetype(PotentialArchetype *parent,
+                                       AssociatedTypeDecl *assocType)
+  : parentOrBuilder(parent), identifier(assocType)
+{
+  assert(parent != nullptr && "Not an associated type?");
+
+#ifndef NDEBUG
+  ++getBuilder()->Impl->NumPotentialArchetypesActive;
+#endif
+}
+
+PotentialArchetype::PotentialArchetype(PotentialArchetype *parent,
+                                       TypeDecl *concreteDecl)
+  : parentOrBuilder(parent), identifier(concreteDecl)
+{
+#ifndef NDEBUG
+  ++getBuilder()->Impl->NumPotentialArchetypesActive;
+#endif
+
+  assert(parent != nullptr && "Not an associated type?");
+}
+
+PotentialArchetype::PotentialArchetype(GenericSignatureBuilder *builder,
+                                       GenericParamKey genericParam)
+  : parentOrBuilder(builder), identifier(genericParam)
+{
+#ifndef NDEBUG
+  ++getBuilder()->Impl->NumPotentialArchetypesActive;
+#endif
+}
+
+PotentialArchetype::~PotentialArchetype() {
   ++NumPotentialArchetypes;
+
+#ifndef NDEBUG
+  assert(getBuilder()->Impl->NumPotentialArchetypesActive > 0);
+  --getBuilder()->Impl->NumPotentialArchetypesActive;
+#endif
 
   for (const auto &nested : NestedTypes) {
     for (auto pa : nested.second) {
@@ -2900,6 +2940,9 @@ GenericSignatureBuilder::~GenericSignatureBuilder() {
 
   for (auto PA : Impl->PotentialArchetypes)
     delete PA;
+
+  assert(Impl->NumPotentialArchetypesActive == 0 &&
+         "Leaked a potential archetype");
 }
 
 std::function<GenericFunction>
