@@ -5869,12 +5869,22 @@ static Type resolveDependentMemberTypes(GenericSignatureBuilder &builder,
     if (auto depTy = dyn_cast<DependentMemberType>(type)) {
       if (depTy->getAssocType()) return None;
 
-      auto pa = builder.resolveArchetype(
-                             type, ArchetypeResolutionKind::CompleteWellFormed);
-      if (!pa)
+      auto parentEquivClass =
+        builder.resolveEquivalenceClass(
+                              depTy->getBase(),
+                              ArchetypeResolutionKind::CompleteWellFormed);
+      if (!parentEquivClass)
         return ErrorType::get(depTy);
 
-      return pa->getDependentType({ });
+      auto memberType = parentEquivClass->lookupNestedType(depTy->getName());
+      if (!memberType)
+        return ErrorType::get(depTy);
+
+      if (auto assocType = dyn_cast<AssociatedTypeDecl>(memberType))
+        return Type(DependentMemberType::get(depTy->getBase(), assocType));
+
+      // FIXME: This is a weird case, because the type is concrete.
+      return Type(type);
     }
 
     return None;
