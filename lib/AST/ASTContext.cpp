@@ -481,6 +481,8 @@ ASTContext::ASTContext(LangOptions &langOpts, SearchPathOptions &SearchPathOpts,
 
 ASTContext::~ASTContext() {
   delete &Impl;
+
+  assert(NumGenericSignatureBuilders == 0 && "Leaked a GSB");
 }
 
 llvm::BumpPtrAllocator &ASTContext::getAllocator(AllocationArena arena) const {

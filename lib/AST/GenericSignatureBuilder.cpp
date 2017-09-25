@@ -2880,11 +2880,19 @@ GenericSignatureBuilder::GenericSignatureBuilder(
   Impl->LookupConformance = std::move(lookupConformance);
   if (Context.Stats)
     Context.Stats->getFrontendCounters().NumGenericSignatureBuilders++;
+
+#ifndef NDEBUG
+  ++Context.NumGenericSignatureBuilders;
+#endif
 }
 
 GenericSignatureBuilder::GenericSignatureBuilder(GenericSignatureBuilder &&) = default;
 
 GenericSignatureBuilder::~GenericSignatureBuilder() {
+#ifndef NDEBUG
+  --Context.NumGenericSignatureBuilders;
+#endif
+
   if (!Impl)
     return;
 

@@ -244,6 +244,11 @@ public:
   /// Optional table of counters to report, nullptr when not collecting.
   UnifiedStatsReporter *Stats = nullptr;
 
+#ifndef NDEBUG
+  /// The # of active generic signature builders.
+  unsigned NumGenericSignatureBuilders = 0;
+#endif
+
 private:
   /// \brief The current generation number, which reflects the number of
   /// times that external modules have been loaded.
