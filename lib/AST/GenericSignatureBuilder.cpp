@@ -42,7 +42,6 @@
 #include <algorithm>
 
 using namespace swift;
-using llvm::DenseMap;
 
 /// Define this to 1 to enable expensive assertions.
 #define SWIFT_GSB_EXPENSIVE_ASSERTIONS 0
@@ -672,8 +671,8 @@ const RequirementSource *RequirementSource::getMinimalConformanceSource(
 
   /// Keep track of all of the requirements we've seen along the way. If
   /// we see the same requirement twice, we have found a shorter path.
-  llvm::DenseMap<std::pair<PotentialArchetype *, ProtocolDecl *>,
-                 const RequirementSource *>
+  llvm::SmallDenseMap<std::pair<PotentialArchetype *, ProtocolDecl *>,
+                      const RequirementSource *>
     constraintsSeen;
 
   // Note that we've now seen a new constraint, returning true if we've seen
@@ -4498,8 +4497,8 @@ GenericSignatureBuilder::finalize(SourceLoc loc,
   // Local function (+ cache) describing the set of equivalence classes
   // directly referenced by the concrete same-type constraint of the given
   // equivalence class.
-  llvm::DenseMap<EquivalenceClass *,
-                 SmallPtrSet<EquivalenceClass *, 4>> concreteEquivClasses;
+  llvm::SmallDenseMap<EquivalenceClass *,
+                      SmallPtrSet<EquivalenceClass *, 4>> concreteEquivClasses;
   auto getConcreteReferencedEquivClasses
       = [&](EquivalenceClass *equivClass)
           -> SmallPtrSet<EquivalenceClass *, 4> {
@@ -6223,7 +6222,8 @@ void GenericSignatureBuilder::enumerateRequirements(llvm::function_ref<
 
     // Enumerate conformance requirements.
     SmallVector<ProtocolDecl *, 4> protocols;
-    DenseMap<ProtocolDecl *, const RequirementSource *> protocolSources;
+    llvm::SmallDenseMap<ProtocolDecl *, const RequirementSource *>
+      protocolSources;
     if (equivClass) {
       for (const auto &conforms : equivClass->conformsTo) {
         protocols.push_back(conforms.first);
