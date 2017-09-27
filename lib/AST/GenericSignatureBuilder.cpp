@@ -3086,6 +3086,43 @@ static ConstraintResult visitInherited(
   return result;
 }
 
+/// Minimize the set of associated types, so that it does not include
+/// associated types inherited from other associated types.
+static void minimizeAssociatedTypes(
+                           SmallVectorImpl<AssociatedTypeDecl *> &assocTypes) {
+  // Mark associated types that are "worse" than some other associated type,
+  // because they come from an inherited protocol.
+  bool anyWorse = false;
+  std::vector<bool> worseThanAny(assocTypes.size(), false);
+  for (unsigned i : indices(assocTypes)) {
+    auto proto1 = assocTypes[i]->getProtocol();
+    for (unsigned j : range(i + 1, assocTypes.size())) {
+      auto proto2 = assocTypes[j]->getProtocol();
+      if (proto1->inheritsFrom(proto2)) {
+        anyWorse = true;
+        worseThanAny[j] = true;
+      } else if (proto2->inheritsFrom(proto1)) {
+        anyWorse = true;
+        worseThanAny[i] = true;
+        break;
+      }
+    }
+  }
+
+  // If we didn't find any associated types that were "worse", we're done.
+  if (!anyWorse) return;
+
+  // Copy in the associated types that aren't worse than any other associated
+  // type.
+  unsigned nextIndex = 0;
+  for (unsigned i : indices(assocTypes)) {
+    if (worseThanAny[i]) continue;
+    assocTypes[nextIndex++] = assocTypes[i];
+  }
+
+  assocTypes.erase(assocTypes.begin() + nextIndex, assocTypes.end());
+}
+
 ConstraintResult GenericSignatureBuilder::expandConformanceRequirement(
                                             PotentialArchetype *pa,
                                             ProtocolDecl *proto,
@@ -3251,6 +3288,18 @@ ConstraintResult GenericSignatureBuilder::expandConformanceRequirement(
   // Add requirements for each of the associated types.
   for (auto Member : getProtocolMembers(proto)) {
     if (auto assocTypeDecl = dyn_cast<AssociatedTypeDecl>(Member)) {
+      // Collect the set of inherited associated types and record them
+      // in the AST.
+      SmallVector<AssociatedTypeDecl *, 4> inheritedAssociatedTypes;
+      SWIFT_DEFER {
+        if (assocTypeDecl->overriddenDeclsComputed()) return;
+
+        // Minimize and record the overridden associated types.
+        minimizeAssociatedTypes(inheritedAssociatedTypes);
+        if (!assocTypeDecl->overriddenDeclsComputed())
+          assocTypeDecl->setOverriddenDecls(inheritedAssociatedTypes);
+      };
+
       // Add requirements placed directly on this associated type.
       Type assocType = DependentMemberType::get(concreteSelf, assocTypeDecl);
       if (!onlySameTypeConstraints) {
@@ -3289,6 +3338,9 @@ ConstraintResult GenericSignatureBuilder::expandConformanceRequirement(
         // If we have inherited associated type...
         if (auto inheritedAssocTypeDecl =
               dyn_cast<AssociatedTypeDecl>(inheritedType)) {
+          // Record this inherited associated type.
+          inheritedAssociatedTypes.push_back(inheritedAssocTypeDecl);
+
           // Infer a same-type requirement among the same-named associated
           // types.
           addInferredSameTypeReq(assocTypeDecl, inheritedAssocTypeDecl);
@@ -3332,6 +3384,7 @@ ConstraintResult GenericSignatureBuilder::expandConformanceRequirement(
       }
 
       inheritedTypeDecls.erase(knownInherited);
+
       continue;
     }
 

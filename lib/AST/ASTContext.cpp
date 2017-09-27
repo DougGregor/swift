@@ -271,6 +271,10 @@ FOR_KNOWN_FOUNDATION_TYPES(CACHE_FOUNDATION_DECL)
   /// The existential signature <T : P> for each P.
   llvm::DenseMap<CanType, CanGenericSignature> ExistentialSignatures;
 
+  /// Overridden associated type declarations.
+  llvm::DenseMap<const AssociatedTypeDecl *, ArrayRef<AssociatedTypeDecl *>>
+    AssociatedTypeOverrides;
+
   /// \brief Structure that captures data that is segregated into different
   /// arenas.
   struct Arena {
@@ -1518,6 +1522,49 @@ GenericEnvironment *ASTContext::getOrCreateCanonicalGenericEnvironment(
   auto env = sig->createGenericEnvironment(module);
   Impl.CanonicalGenericEnvironments[builder] = env;
   return env;
+}
+
+ArrayRef<AssociatedTypeDecl *> AssociatedTypeDecl::getOverriddenDecls() const {
+  assert(AssociatedTypeDeclBits.ComputedOverridden &&
+         "Overridden decls not computed");
+  if (!AssociatedTypeDeclBits.HasOverridden)
+    return { };
+
+  auto known = getASTContext().Impl.AssociatedTypeOverrides.find(this);
+  assert(known != getASTContext().Impl.AssociatedTypeOverrides.end());
+  return known->second;
+}
+
+/// Sort associated types just based on the protocol.
+static int compareSimilarAssociatedTypes(AssociatedTypeDecl *const *lhs,
+                                         AssociatedTypeDecl *const *rhs) {
+  auto lhsProto = (*lhs)->getProtocol();
+  auto rhsProto = (*rhs)->getProtocol();
+  return ProtocolType::compareProtocols(&lhsProto, &rhsProto);
+}
+
+void AssociatedTypeDecl::setOverriddenDecls(
+                                ArrayRef<AssociatedTypeDecl *> overridden) {
+  assert(!AssociatedTypeDeclBits.ComputedOverridden &&
+         "Overridden decls already computed");
+  AssociatedTypeDeclBits.ComputedOverridden = true;
+
+  // If the set of overridden declarations is empty, note that.
+  if (overridden.empty()) {
+    AssociatedTypeDeclBits.HasOverridden = false;
+    return;
+  }
+
+  // Record the overrides in the context.
+  AssociatedTypeDeclBits.HasOverridden = true;
+  auto &ctx = getASTContext();
+  auto overriddenCopy = ctx.AllocateCopy(overridden);
+  llvm::array_pod_sort(overriddenCopy.begin(), overriddenCopy.end(),
+                       compareSimilarAssociatedTypes);
+  auto inserted =
+    ctx.Impl.AssociatedTypeOverrides.insert({this, overriddenCopy}).second;
+  (void)inserted;
+  assert(inserted && "Already recorded associated type overrides");
 }
 
 bool ASTContext::canImportModule(std::pair<Identifier, SourceLoc> ModulePath) {
