@@ -166,19 +166,15 @@ public:
     Indent -= 2;
   }
 
-  void visitProtocolTypeRef(const ProtocolTypeRef *P) {
-    printHeader("protocol");
-    auto demangled = Demangle::demangleTypeAsString(P->getMangledName());
-    printField("", demangled);
-    OS << ')';
-  }
-
   void visitProtocolCompositionTypeRef(const ProtocolCompositionTypeRef *PC) {
     printHeader("protocol_composition");
-    if (PC->hasExplicitAnyObject())
+    if (auto superclass = PC->getSuperclass()) {
+      OS << " superclass ";
+      printRec(superclass);
+    } else if (PC->hasExplicitAnyObject())
       OS << " any_object";
-    for (auto member : PC->getMembers())
-      printRec(member);
+    for (auto protocol : PC->getProtocols())
+      printRec(protocol);
     OS << ')';
   }
 
@@ -205,7 +201,7 @@ public:
 
   void visitDependentMemberTypeRef(const DependentMemberTypeRef *DM) {
     printHeader("dependent_member");
-    printRec(DM->getProtocol());
+    printField("protocol", DM->getProtocol());
     printRec(DM->getBase());
     printField("member", DM->getMember());
     OS << ')';
@@ -296,14 +292,13 @@ struct TypeRefIsConcrete
     return visit(F->getResult());
   }
 
-  bool visitProtocolTypeRef(const ProtocolTypeRef *P) {
-    return true;
-  }
-
   bool
   visitProtocolCompositionTypeRef(const ProtocolCompositionTypeRef *PC) {
-    for (auto Member : PC->getMembers())
-      if (!visit(Member))
+    for (auto Protocol : PC->getProtocols())
+      if (!visit(Protocol))
+        return false;
+    if (auto Superclass = PC->getSuperclass())
+      if (!visit(Superclass))
         return false;
     return true;
   }
@@ -453,6 +448,16 @@ bool isClass(Demangle::NodePointer Node) {
       return false;
   }
 }
+bool isProtocol(Demangle::NodePointer Node) {
+  switch (Node->getKind()) {
+    case Demangle::Node::Kind::Type:
+      return isProtocol(Node->getChild(0));
+    case Demangle::Node::Kind::Protocol:
+      return true;
+    default:
+      return false;
+  }
+}
 } // end anonymous namespace
 
 bool NominalTypeTrait::isStruct() const {
@@ -473,6 +478,12 @@ bool NominalTypeTrait::isClass() const {
   Demangle::Demangler Dem;
   Demangle::NodePointer Demangled = Dem.demangleType(MangledName);
   return ::isClass(Demangled);
+}
+
+bool NominalTypeTrait::isProtocol() const {
+  Demangle::Demangler Dem;
+  Demangle::NodePointer Demangled = Dem.demangleType(MangledName);
+  return ::isProtocol(Demangled);
 }
 
 /// Visitor class to set the WasAbstract flag of any MetatypeTypeRefs
@@ -519,10 +530,6 @@ public:
 
     return FunctionTypeRef::create(Builder, SubstitutedParams,
                                    SubstitutedResult, F->getFlags());
-  }
-
-  const TypeRef *visitProtocolTypeRef(const ProtocolTypeRef *P) {
-    return P;
   }
 
   const TypeRef *
@@ -636,12 +643,6 @@ public:
                                    SubstitutedResult, F->getFlags());
   }
 
-  const TypeRef *visitProtocolTypeRef(const ProtocolTypeRef *P) {
-    // Protocol compositions do not contain type parameters.
-    assert(P->isConcrete());
-    return P;
-  }
-
   const TypeRef *
   visitProtocolCompositionTypeRef(const ProtocolCompositionTypeRef *PC) {
     return PC;
@@ -691,7 +692,7 @@ public:
 
     while (TypeWitness == nullptr) {
       auto &Member = DM->getMember();
-      auto *Protocol = DM->getProtocol();
+      const auto &Protocol = DM->getProtocol();
 
       // Get the original type of the witness from the conformance.
       if (auto *Nominal = dyn_cast<NominalTypeRef>(SubstBase)) {
