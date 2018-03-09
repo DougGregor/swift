@@ -811,9 +811,6 @@ public:
   bool areInSameEquivalenceClass(Type type1, Type type2);
 
   /// Simplify the given dependent type down to its canonical representation.
-  ///
-  /// \returns null if the type involved dependent member types that
-  /// don't have associated types.
   Type getCanonicalTypeParameter(Type type);
 
   /// Verify the correctness of the given generic signature.
