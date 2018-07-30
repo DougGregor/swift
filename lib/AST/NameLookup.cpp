@@ -472,6 +472,64 @@ static DeclVisibilityKind getLocalDeclVisibilityKind(const ASTScope *scope) {
   llvm_unreachable("Unhandled ASTScopeKind in switch.");
 }
 
+/// Check whether the given type is the protocol's Self.
+static bool isProtocolSelf(ProtocolDecl *proto, const TypeLoc &typeLoc) {
+  // If we are looking into a type as written in the source...
+  if (auto typeRepr = typeLoc.getTypeRepr()) {
+    // Written directly as 'Self'.
+    // FIXME: Would prefer to resolve this TypeRepr down to a TypeDecl.
+    if (auto ident = dyn_cast<SimpleIdentTypeRepr>(typeRepr)) {
+      return ident->getIdentifier() == proto->getASTContext().Id_Self;
+    }
+
+    return false;
+  }
+
+  // Otherwise, we're looking at a synthesized type without location
+  // information.
+  if (auto type = typeLoc.getType()) {
+    // The type is 'Self'.
+    return type->isEqual(proto->getProtocolSelfType());
+  }
+
+  return false;
+}
+
+/// Retrieve the set of nominal
+static llvm::TinyPtrVector<NominalTypeDecl *>
+lookupTargetsForContext(const DeclContext *dc) {
+  auto nominal = dc->getAsNominalTypeOrNominalTypeExtensionContext();
+  if (!nominal) return { };
+
+  // Perform lookup from the nominal type.
+  llvm::TinyPtrVector<NominalTypeDecl *> results;
+  results.push_back(nominal);
+
+  // A protocol extension may have a where clause with type constraints
+  // on 'Self'. Find those as well.
+  if (auto ext = dyn_cast<ExtensionDecl>(dc)) {
+    if (auto proto = dyn_cast<ProtocolDecl>(nominal)) {
+      if (auto whereClause = ext->getTrailingWhereClause()) {
+        ASTContext &ctx = dc->getASTContext();
+        for (const auto &req : whereClause->getRequirements()) {
+          if (req.getKind() != RequirementReprKind::TypeConstraint)
+            continue;
+
+          // Check whether the left-hand side of the constraint is
+          // 'Self'.
+          if (!isProtocolSelf(proto, req.getFirstTypeLoc()))
+            continue;
+
+          // Find the nominal types in the right-hand side.
+
+        }
+      }
+    }
+  }
+
+}
+
+
 UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
                                      LazyResolver *TypeResolver, SourceLoc Loc,
                                      Options options)
