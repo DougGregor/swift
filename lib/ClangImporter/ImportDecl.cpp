@@ -4752,21 +4752,21 @@ namespace {
       // Check whether there is a function with the same name as this
       // property. If so, suppress the property; the user will have to use
       // the methods directly, to avoid ambiguities.
-      Type containerTy = dc->getDeclaredInterfaceType();
-      Type lookupContextTy = containerTy;
+      NominalTypeDecl *lookupContext =
+        dc->getAsNominalTypeOrNominalTypeExtensionContext();
       if (auto *classDecl = dyn_cast<ClassDecl>(dc)) {
         // If we're importing into the primary @interface for something, as
         // opposed to an extension, make sure we don't try to load any
         // categories...by just looking into the super type.
-        lookupContextTy = classDecl->getSuperclass();
+        lookupContext = classDecl->getSuperclassDecl();
       }
 
       VarDecl *overridden = nullptr;
-      if (lookupContextTy) {
+      if (lookupContext) {
         SmallVector<ValueDecl *, 2> lookup;
-        dc->lookupQualified(lookupContextTy, name,
+        dc->lookupQualified(lookupContext, name,
                             NL_QualifiedDefault | NL_KnownNoDependency,
-                            Impl.getTypeResolver(), lookup);
+                            lookup);
         for (auto result : lookup) {
           if (isa<FuncDecl>(result) &&
               result->isInstanceMember() == decl->isInstanceProperty() &&
@@ -4789,7 +4789,8 @@ namespace {
         // It's okay to compare interface types directly because Objective-C
         // does not have constrained extensions.
         if (overrideContext != dc && overridden->hasClangNode() &&
-            overrideContext->getDeclaredInterfaceType()->isEqual(containerTy)) {
+            overrideContext->getAsNominalTypeOrNominalTypeExtensionContext()
+              == lookupContext) {
           // We've encountered a redeclaration of the property.
           // HACK: Just update the original declaration instead of importing a
           // second property.
@@ -6282,15 +6283,14 @@ void SwiftDeclConverter::recordObjCOverride(AbstractFunctionDecl *decl) {
   auto classDecl = decl->getDeclContext()->getAsClassOrClassExtensionContext();
   if (!classDecl)
     return;
-  auto superTy = classDecl->getSuperclass();
-  if (!superTy)
+  auto superDecl = classDecl->getSuperclassDecl();
+  if (!superDecl)
     return;
   // Dig out the Objective-C superclass.
-  auto superDecl = superTy->getAnyNominal();
   SmallVector<ValueDecl *, 4> results;
-  superDecl->lookupQualified(superTy, decl->getFullName(),
+  superDecl->lookupQualified(superDecl, decl->getFullName(),
                              NL_QualifiedDefault | NL_KnownNoDependency,
-                             Impl.getTypeResolver(), results);
+                             results);
   for (auto member : results) {
     if (member->getKind() != decl->getKind() ||
         member->isInstanceMember() != decl->isInstanceMember() ||
@@ -6333,17 +6333,16 @@ void SwiftDeclConverter::recordObjCOverride(SubscriptDecl *subscript) {
   if (!classTy)
     return;
 
-  auto superTy = classTy->getSuperclass();
-  if (!superTy)
+  auto superDecl = classTy->getSuperclassDecl();
+  if (!superDecl)
     return;
 
   // Determine whether this subscript operation overrides another subscript
   // operation.
   SmallVector<ValueDecl *, 2> lookup;
   subscript->getModuleContext()->lookupQualified(
-      superTy, subscript->getFullName(),
-      NL_QualifiedDefault | NL_KnownNoDependency, Impl.getTypeResolver(),
-      lookup);
+      superDecl, subscript->getFullName(),
+      NL_QualifiedDefault | NL_KnownNoDependency, lookup);
   Type unlabeledIndices;
   for (auto result : lookup) {
     auto parentSub = dyn_cast<SubscriptDecl>(result);
