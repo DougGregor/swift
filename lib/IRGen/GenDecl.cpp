@@ -1082,6 +1082,7 @@ void IRGenerator::emitTypeMetadataRecords() {
 void IRGenerator::emitLazyDefinitions() {
   while (!LazyTypeMetadata.empty() ||
          !LazyTypeContextDescriptors.empty() ||
+         !LazyOpaqueTypeDescriptors.empty() ||
          !LazyFieldDescriptors.empty() ||
          !LazyFunctionDefinitions.empty() ||
          !LazyWitnessTables.empty()) {
@@ -1105,6 +1106,11 @@ void IRGenerator::emitLazyDefinitions() {
       CurrentIGMPtr IGM = getGenModule(type->getDeclContext());
       emitLazyTypeContextDescriptor(*IGM.get(), type,
                                     RequireMetadata_t(entry.IsMetadataUsed));
+    }
+    while (!LazyOpaqueTypeDescriptors.empty()) {
+      auto type = LazyOpaqueTypeDescriptors.pop_back_val();
+      CurrentIGMPtr IGM = getGenModule(type->getDeclContext());
+      IGM->emitOpaqueTypeDecl(type);
     }
     while (!LazyFieldDescriptors.empty()) {
       NominalTypeDecl *type = LazyFieldDescriptors.pop_back_val();
