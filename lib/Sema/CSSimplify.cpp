@@ -1157,6 +1157,8 @@ ConstraintSystem::matchTupleTypes(TupleType *tuple1, TupleType *tuple2,
   case ConstraintKind::BridgingConversion:
   case ConstraintKind::FunctionInput:
   case ConstraintKind::FunctionResult:
+  case ConstraintKind::OneWayBind:
+  case ConstraintKind::OneWayBindParam:
     llvm_unreachable("Not a conversion");
   }
 
@@ -1219,6 +1221,8 @@ static bool matchFunctionRepresentations(FunctionTypeRepresentation rep1,
   case ConstraintKind::ValueMember:
   case ConstraintKind::FunctionInput:
   case ConstraintKind::FunctionResult:
+  case ConstraintKind::OneWayBind:
+  case ConstraintKind::OneWayBindParam:
     return false;
   }
 
@@ -1396,6 +1400,8 @@ ConstraintSystem::matchFunctionTypes(FunctionType *func1, FunctionType *func2,
   case ConstraintKind::BridgingConversion:
   case ConstraintKind::FunctionInput:
   case ConstraintKind::FunctionResult:
+  case ConstraintKind::OneWayBind:
+  case ConstraintKind::OneWayBindParam:
     llvm_unreachable("Not a relational constraint");
   }
 
@@ -2655,6 +2661,8 @@ ConstraintSystem::matchTypes(Type type1, Type type2, ConstraintKind kind,
     case ConstraintKind::ValueMember:
     case ConstraintKind::FunctionInput:
     case ConstraintKind::FunctionResult:
+    case ConstraintKind::OneWayBind:
+    case ConstraintKind::OneWayBindParam:
       llvm_unreachable("Not a relational constraint");
     }
   }
@@ -5139,6 +5147,42 @@ ConstraintSystem::simplifyDefaultableConstraint(
   return SolutionKind::Solved;
 }
 
+ConstraintSystem::SolutionKind
+ConstraintSystem::simplifyOneWayConstraint(
+    ConstraintKind kind,
+    Type first, Type second, TypeMatchOptions flags,
+    ConstraintLocatorBuilder locator) {
+  // Determine whether the second type can be fully simplified. Only then
+  // will this constraint be resolved.
+  Type secondSimplified = simplifyType(second);
+  if (secondSimplified->hasTypeVariable()) {
+    if (flags.contains(TMF_GenerateConstraints)) {
+      addUnsolvedConstraint(
+        Constraint::create(*this, kind, first, second,
+                           getConstraintLocator(locator)));
+      return SolutionKind::Solved;
+    }
+
+    return SolutionKind::Unsolved;
+  }
+
+  // Translate this constraint into a one-way binding constraint.
+  ConstraintKind bindingKind = ConstraintKind::Bind; // silence warning
+  switch (kind) {
+  case ConstraintKind::OneWayBind:
+    kind = ConstraintKind::Bind;
+    break;
+
+  case ConstraintKind::OneWayBindParam:
+    kind = ConstraintKind::BindParam;
+    std::swap(first, secondSimplified);
+    break;
+
+  default:
+    llvm_unreachable("Not a one-way constraint");
+  }
+  return matchTypes(first, secondSimplified, bindingKind, flags, locator);
+}
 
 ConstraintSystem::SolutionKind
 ConstraintSystem::simplifyDynamicTypeOfConstraint(
@@ -7091,6 +7135,10 @@ ConstraintSystem::addConstraintImpl(ConstraintKind kind, Type first,
     return simplifyFunctionComponentConstraint(kind, first, second,
                                                subflags, locator);
 
+  case ConstraintKind::OneWayBind:
+  case ConstraintKind::OneWayBindParam:
+    return simplifyOneWayConstraint(kind, first, second, subflags, locator);
+
   case ConstraintKind::ValueMember:
   case ConstraintKind::UnresolvedValueMember:
   case ConstraintKind::BindOverload:
@@ -7446,6 +7494,14 @@ ConstraintSystem::simplifyConstraint(const Constraint &constraint) {
   case ConstraintKind::Disjunction:
     // Disjunction constraints are never solved here.
     return SolutionKind::Unsolved;
+
+  case ConstraintKind::OneWayBind:
+  case ConstraintKind::OneWayBindParam:
+    return simplifyOneWayConstraint(constraint.getKind(),
+                                    constraint.getFirstType(),
+                                    constraint.getSecondType(),
+                                    TMF_GenerateConstraints,
+                                    constraint.getLocator());
   }
 
   llvm_unreachable("Unhandled ConstraintKind in switch.");

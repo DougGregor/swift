@@ -632,6 +632,19 @@ ConstraintSystem::getPotentialBindings(TypeVariableType *typeVar) {
         result.FullyBound = true;
       }
       break;
+
+    case ConstraintKind::OneWayBind:
+    case ConstraintKind::OneWayBindParam: {
+      // Don't produce any bindings if this type variable is on the left-hand
+      // side of a one-way binding.
+      auto firstType = constraint->getFirstType();
+      if (auto *tv = firstType->getAs<TypeVariableType>()) {
+        if (tv->getImpl().getRepresentative(nullptr) == typeVar)
+          return {typeVar};
+      }
+
+      break;
+    }
     }
   }
 

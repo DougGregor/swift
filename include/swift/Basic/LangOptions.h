@@ -228,6 +228,9 @@ namespace swift {
     ///        operator protocol designator feature.
     bool SolverEnableOperatorDesignatedTypes = false;
 
+    /// Enable the use of one-way constraints in the constraint solver.
+    bool EnableSolverOneWayConstraints = false;
+
     /// The maximum depth to which to test decl circularity.
     unsigned MaxCircularityDepth = 500;
 

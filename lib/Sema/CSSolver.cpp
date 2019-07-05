@@ -1681,6 +1681,8 @@ void ConstraintSystem::ArgumentInfoCollector::walk(Type argType) {
       case ConstraintKind::SelfObjectOfProtocol:
       case ConstraintKind::ConformsTo:
       case ConstraintKind::Defaultable:
+      case ConstraintKind::OneWayBind:
+      case ConstraintKind::OneWayBindParam:
         break;
       }
     }

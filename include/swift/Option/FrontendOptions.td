@@ -413,6 +413,10 @@ def solver_enable_operator_designated_types :
   Flag<["-"], "solver-enable-operator-designated-types">,
   HelpText<"Enable operator designated types in constraint solver">;
 
+def enable_solver_one_way_constraints :
+  Flag<["-"], "enable-solver-one-way-constraints">,
+  HelpText<"Enable one-way-constraints in the constraint solver">;
+
 def switch_checking_invocation_threshold_EQ : Joined<["-"],
     "switch-checking-invocation-threshold=">;
 

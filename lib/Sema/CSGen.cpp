@@ -921,6 +921,7 @@ namespace {
     ConstraintSystem &CS;
     DeclContext *CurDC;
     SmallVector<DeclContext*, 4> DCStack;
+    llvm::SmallDenseMap<const ClosureExpr *, Type> origClosureResultTypes;
 
     static const unsigned numEditorPlaceholderVariables = 2;
 
@@ -1123,7 +1124,15 @@ namespace {
       assert(CurDC == closure);
       CurDC = DCStack.pop_back_val();
     }
-    
+
+    Type getClosureBodyResultType(ClosureExpr *closure) {
+      auto known = origClosureResultTypes.find(closure);
+      if (known != origClosureResultTypes.end())
+        return known->second;
+
+      return CS.getType(closure)->castTo<FunctionType>()->getResult();
+    }
+
     virtual Type visitErrorExpr(ErrorExpr *E) {
       // FIXME: Can we do anything with error expressions at this point?
       return nullptr;
@@ -2027,8 +2036,13 @@ namespace {
           internalType = CS.createTypeVariable(locator,
                                                TVO_CanBindToLValue |
                                                TVO_CanBindToNoEscape);
-          CS.addConstraint(ConstraintKind::BindParam, paramType, internalType,
-                           locator);
+          if (CS.getASTContext().LangOpts.EnableSolverOneWayConstraints) {
+            CS.addConstraint(ConstraintKind::OneWayBindParam, internalType,
+                             paramType, locator);
+          } else {
+            CS.addConstraint(ConstraintKind::BindParam, paramType, internalType,
+                             locator);
+          }
         }
         CS.setType(param, internalType);
         params.push_back(param->toFunctionParam(paramType));
@@ -2410,6 +2424,19 @@ namespace {
       auto extInfo = FunctionType::ExtInfo();
       if (closureCanThrow(expr))
         extInfo = extInfo.withThrows();
+
+      // When one-way constraints are enabled, introduce a distinct type
+      // variable
+      if (CS.getASTContext().LangOpts.EnableSolverOneWayConstraints) {
+        auto locator =
+          CS.getConstraintLocator(expr, ConstraintLocator::ClosureResult);
+
+        Type outgoingResultTy = CS.createTypeVariable(locator, 0);
+        CS.addConstraint(ConstraintKind::OneWayBind, outgoingResultTy, resultTy,
+                         locator);
+        origClosureResultTypes[expr] = resultTy;
+        resultTy = outgoingResultTy;
+      }
 
       return FunctionType::get(paramTy, resultTy, extInfo);
     }
@@ -3602,12 +3629,12 @@ namespace {
 
           // If the function type has an error in it, we don't want to solve the
           // system.
-          if (closureTy && closureTy->hasError())
+          if (closureTy->hasError())
             return nullptr;
 
           // Visit the body. It's type needs to be convertible to the function's
           // return type.
-          auto resultTy = closureTy->castTo<FunctionType>()->getResult();
+          Type resultTy = CG.getClosureBodyResultType(closure);
           Type bodyTy = CS.getType(closure->getSingleExpressionBody());
           CG.getConstraintSystem().setFavoredType(expr, bodyTy.getPointer());
           CG.getConstraintSystem()
