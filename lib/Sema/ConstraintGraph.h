@@ -203,6 +203,20 @@ public:
     return TypeVariables;
   }
 
+  /// Describes a single component within the directed graph of one-way
+  /// constraints.
+  struct OneWayComponent {
+    /// The type variables in this component.
+    TinyPtrVector<TypeVariableType *> typeVars;
+
+    /// The set of one-way component indices that this one-way component
+    /// depends on, such that the type variables in each listed one-way
+    /// component must be bound for this component to be solved.
+    ///
+    /// FIXME: Use a TinyPtrVector here.
+    std::vector<unsigned> dependsOn;
+  };
+
   /// Describes a single component, as produced by the connected components
   /// algorithm.
   struct Component {
@@ -211,6 +225,13 @@ public:
 
     /// The constraints in this component.
     TinyPtrVector<Constraint *> constraints;
+
+    /// The set of one-way components that are enclosed within this component,
+    /// in the order in which they need to be solved to ensure that the
+    /// dependencies of each component are solved before it can be solved.
+    /// The specific dependencies are encoded in the component as indices
+    /// into this vector.
+    std::vector<OneWayComponent> oneWayComponents;
   };
 
   /// Compute the connected components of the graph.
