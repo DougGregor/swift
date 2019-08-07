@@ -541,6 +541,8 @@ namespace {
 
       // Assign each type variable to its appropriate component.
       SmallVector<Component, 1> components;
+      components.reserve(
+          validComponents.size() + cg.getOrphanedConstraints().size());
       llvm::SmallDenseMap<TypeVariableType *, unsigned> componentIdxMap;
       SmallPtrSet<Constraint *, 4> knownConstraints;
       for (auto typeVar : typeVars) {
@@ -571,6 +573,12 @@ namespace {
         auto rep = findRepresentative(typeVar);
         assert(componentIdxMap.count(rep) > 0);
         components[componentIdxMap[rep]].constraints.push_back(constraint);
+      }
+
+      // Gather orphaned constraints; each gets its own component.
+      for (auto orphaned : cg.getOrphanedConstraints()) {
+        components.push_back({ });
+        components.back().constraints.push_back(orphaned);
       }
 
       return components;
@@ -631,7 +639,6 @@ ConstraintGraph::computeConnectedComponents(
   // Perform connected components via a union-find algorithm on all of the
   // constraints adjacent to these type variables.
   ConnectedComponents cc(*this, typeVars);
-
   return cc.getComponents();
 }
 
