@@ -1146,7 +1146,7 @@ ConstraintSystem::matchTupleTypes(TupleType *tuple1, TupleType *tuple2,
   case ConstraintKind::BridgingConversion:
   case ConstraintKind::FunctionInput:
   case ConstraintKind::FunctionResult:
-  case ConstraintKind::OneWayBind:
+  case ConstraintKind::OneWayEqual:
     llvm_unreachable("Not a conversion");
   }
 
@@ -1209,7 +1209,7 @@ static bool matchFunctionRepresentations(FunctionTypeRepresentation rep1,
   case ConstraintKind::ValueMember:
   case ConstraintKind::FunctionInput:
   case ConstraintKind::FunctionResult:
-  case ConstraintKind::OneWayBind:
+  case ConstraintKind::OneWayEqual:
     return false;
   }
 
@@ -1394,7 +1394,7 @@ ConstraintSystem::matchFunctionTypes(FunctionType *func1, FunctionType *func2,
   case ConstraintKind::BridgingConversion:
   case ConstraintKind::FunctionInput:
   case ConstraintKind::FunctionResult:
-  case ConstraintKind::OneWayBind:
+  case ConstraintKind::OneWayEqual:
     llvm_unreachable("Not a relational constraint");
   }
 
@@ -2812,7 +2812,7 @@ ConstraintSystem::matchTypes(Type type1, Type type2, ConstraintKind kind,
     case ConstraintKind::ValueMember:
     case ConstraintKind::FunctionInput:
     case ConstraintKind::FunctionResult:
-    case ConstraintKind::OneWayBind:
+    case ConstraintKind::OneWayEqual:
       llvm_unreachable("Not a relational constraint");
     }
   }
@@ -5240,7 +5240,7 @@ ConstraintSystem::simplifyOneWayConstraint(
   }
 
   // Translate this constraint into a one-way binding constraint.
-  return matchTypes(first, secondSimplified, ConstraintKind::Bind, flags,
+  return matchTypes(first, secondSimplified, ConstraintKind::Equal, flags,
                     locator);
 }
 
@@ -7288,7 +7288,7 @@ ConstraintSystem::addConstraintImpl(ConstraintKind kind, Type first,
     return simplifyFunctionComponentConstraint(kind, first, second,
                                                subflags, locator);
 
-  case ConstraintKind::OneWayBind:
+  case ConstraintKind::OneWayEqual:
     return simplifyOneWayConstraint(kind, first, second, subflags, locator);
 
   case ConstraintKind::ValueMember:
@@ -7647,7 +7647,7 @@ ConstraintSystem::simplifyConstraint(const Constraint &constraint) {
     // Disjunction constraints are never solved here.
     return SolutionKind::Unsolved;
 
-  case ConstraintKind::OneWayBind:
+  case ConstraintKind::OneWayEqual:
     return simplifyOneWayConstraint(constraint.getKind(),
                                     constraint.getFirstType(),
                                     constraint.getSecondType(),
