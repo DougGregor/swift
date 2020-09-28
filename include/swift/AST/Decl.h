@@ -4172,6 +4172,7 @@ enum class KnownDerivableProtocolKind : uint8_t {
   Decodable,
   AdditiveArithmetic,
   Differentiable,
+  Actor,
 };
 
 /// ProtocolDecl - A declaration of a protocol, for example:
