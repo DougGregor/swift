@@ -6326,6 +6326,14 @@ public:
 
   bool isMainTypeMainMethod() const;
 
+  /// Whether the given name is enqueue(partialTask:), which is used for
+  /// actors.
+  static bool isEnqueuePartialTaskName(ASTContext &ctx, DeclName name);
+
+  /// Determine whether this function is the witness to the Actor protocol's
+  /// enqueue(partialTask:) operation within an actor.
+  bool isActorEnqueuePartialTaskWitness() const;
+
   SelfAccessKind getSelfAccessKind() const;
 
   void setSelfAccessKind(SelfAccessKind mod) {
