@@ -62,11 +62,7 @@ namespace {
   class ContextualizeClosures : public ASTWalker {
     DeclContext *ParentDC;
   public:
-    unsigned NextDiscriminator = 0;
-
-    ContextualizeClosures(DeclContext *parent,
-                          unsigned nextDiscriminator = 0)
-      : ParentDC(parent), NextDiscriminator(nextDiscriminator) {}
+    ContextualizeClosures(DeclContext *parent) : ParentDC(parent) {}
 
     PreWalkResult<Expr *> walkToExprPre(Expr *E) override {
       // Autoclosures need to be numbered and potentially reparented.
@@ -75,15 +71,6 @@ namespace {
       //     parented to the outer context, not the outer autoclosure
       //   - non-local initializers
       if (auto CE = dyn_cast<AutoClosureExpr>(E)) {
-        // FIXME: Work around an apparent reentrancy problem with the REPL.
-        // I don't understand what's going on here well enough to fix the
-        // underlying issue. -Joe
-        if (CE->getParent() == ParentDC
-            && CE->getDiscriminator() != AutoClosureExpr::InvalidDiscriminator)
-          return Action::SkipChildren(E);
-        
-        assert(CE->getDiscriminator() == AutoClosureExpr::InvalidDiscriminator);
-        CE->setDiscriminator(NextDiscriminator++);
         CE->setParent(ParentDC);
 
         // Recurse into the autoclosure body using the same sequence,
@@ -220,14 +207,168 @@ void TypeChecker::contextualizeInitializer(Initializer *DC, Expr *E) {
 }
 
 void TypeChecker::contextualizeTopLevelCode(TopLevelCodeDecl *TLCD) {
-  auto &Context = TLCD->DeclContext::getASTContext();
-  unsigned nextDiscriminator = Context.NextAutoClosureDiscriminator;
-  ContextualizeClosures CC(TLCD, nextDiscriminator);
+  ContextualizeClosures CC(TLCD);
   if (auto *body = TLCD->getBody())
     body->walk(CC);
-  assert(nextDiscriminator == Context.NextAutoClosureDiscriminator &&
-         "reentrant/concurrent invocation of contextualizeTopLevelCode?");
-  Context.NextAutoClosureDiscriminator = CC.NextDiscriminator;
+}
+
+namespace {
+  /// The "pass" during which we assign discriminators.
+  enum class DiscriminatorPass {
+    /// Explicitly-written closures.
+    ExplicitClosures,
+
+    /// Autoclosures.
+    Autoclosures,
+  };
+
+  class SetLocalDiscriminators : public ASTWalker {
+    llvm::Optional<DiscriminatorPass> Pass;
+
+  public:
+    unsigned NextDiscriminator = 0;
+
+    SetLocalDiscriminators(
+        Optional<unsigned> nextDiscriminator
+    ) : Pass(None), NextDiscriminator(nextDiscriminator.getValueOr(0)) {}
+
+    LazyInitializerWalking getLazyInitializerWalkingBehavior() override {
+      return LazyInitializerWalking::InAccessor;
+    }
+
+    /// Setup the next pass.
+    ///
+    /// \returns true when there is a next pass, false when there are no
+    /// more passes.
+    bool startNextPass() {
+      if (!Pass) {
+        Pass = DiscriminatorPass::ExplicitClosures;
+        return true;
+      }
+
+      switch (*Pass) {
+      case DiscriminatorPass::ExplicitClosures:
+        Pass = DiscriminatorPass::Autoclosures;
+        return true;
+
+      case DiscriminatorPass::Autoclosures:
+        return false;
+      }
+    }
+
+    DiscriminatorPass getCurrentPass() const { return *Pass; }
+
+    PreWalkResult<Expr *> walkToExprPre(Expr *E) override {
+      assert(Pass && "Loop while startNextPass() returns true");
+
+      // Autoclosures need to be numbered and potentially reparented.
+      // Reparenting is required with:
+      //   - nested autoclosures, because the inner autoclosure will be
+      //     parented to the outer context, not the outer autoclosure
+      //   - non-local initializers
+      if (auto CE = dyn_cast<AutoClosureExpr>(E)) {
+        if (CE->getRawDiscriminator() != AutoClosureExpr::InvalidDiscriminator)
+          return Action::SkipChildren(E);
+
+        if (Pass == DiscriminatorPass::Autoclosures) {
+          assert(
+              CE->getRawDiscriminator() == AutoClosureExpr::InvalidDiscriminator);
+          CE->setDiscriminator(NextDiscriminator++);
+        }
+
+        // Recurse into the autoclosure body using the same sequence,
+        // but parenting to the autoclosure instead of the outer closure.
+        CE->getBody()->walk(*this);
+
+        return Action::SkipChildren(E);
+      }
+
+      // Explicit closures start their own sequence.
+      if (auto CE = dyn_cast<ClosureExpr>(E)) {
+        if (Pass == DiscriminatorPass::ExplicitClosures) {
+          if(CE->getRawDiscriminator() == ClosureExpr::InvalidDiscriminator)
+            CE->setDiscriminator(NextDiscriminator++);
+        }
+
+        // If the closure was type checked within its enclosing context,
+        // we need to walk into it with a new sequence.
+        // Otherwise, it'll have been separately type-checked.
+        if (!CE->isSeparatelyTypeChecked()) {
+          CE->getBody()->walk(*this);
+        }
+
+        return Action::SkipChildren(E);
+      }
+
+      // Caller-side default arguments need their @autoclosures checked.
+      if (auto *DAE = dyn_cast<DefaultArgumentExpr>(E))
+        if (DAE->isCallerSide() && DAE->getParamDecl()->isAutoClosure())
+          DAE->getCallerSideDefaultExpr()->walk(*this);
+
+      return Action::Continue(E);
+    }
+
+    /// We don't want to recurse into most local declarations.
+    PreWalkAction walkToDeclPre(Decl *D) override {
+      assert(Pass && "Loop while startNextPass() returns true");
+
+      // But we do want to walk into the initializers of local
+      // variables.
+      return Action::VisitChildrenIf(isa<PatternBindingDecl>(D));
+    }
+  };
+}
+
+unsigned LocalDiscriminatorsRequest::evaluate(
+    Evaluator &evaluator, DeclContext *dc
+) const {
+  ASTContext &ctx = dc->getASTContext();
+
+  if (auto autoclosure = dyn_cast<AutoClosureExpr>(dc)) {
+    // Autoclosures aren't their own contexts; look to the parent instead.
+    return evaluateOrDefault(evaluator,
+                             LocalDiscriminatorsRequest{dc->getParent()}, 0);
+  }
+
+  Optional<unsigned> expectedNextAutoclosureDiscriminator = None;
+  ASTNode node;
+  if (auto func = dyn_cast<AbstractFunctionDecl>(dc)) {
+    node = func->getBody();
+  } else if (auto closure = dyn_cast<ClosureExpr>(dc)) {
+    node = closure->getBody();
+  } else if (auto topLevel = dyn_cast<TopLevelCodeDecl>(dc)) {
+    node = topLevel->getBody();
+    expectedNextAutoclosureDiscriminator = ctx.NextAutoClosureDiscriminator;
+  } else if (auto patternBindingInit = dyn_cast<PatternBindingInitializer>(dc)){
+    auto patternBinding = patternBindingInit->getBinding();
+    node = patternBinding->getInit(patternBindingInit->getBindingIndex());
+  } else if (auto defaultArgInit = dyn_cast<DefaultArgumentInitializer>(dc)) {
+    auto param = getParameterAt(
+        cast<ValueDecl>(dc->getParent()->getAsDecl()),
+        defaultArgInit->getIndex());
+    if (!param)
+      return 0;
+
+    node = param->getTypeCheckedDefaultExpr();
+  }
+
+  if (!node)
+    return 0;
+
+  SetLocalDiscriminators setLocalDiscriminators(
+      expectedNextAutoclosureDiscriminator);
+  while (setLocalDiscriminators.startNextPass()) {
+    node.walk(setLocalDiscriminators);
+  }
+  assert((!expectedNextAutoclosureDiscriminator ||
+          *expectedNextAutoclosureDiscriminator ==
+              ctx.NextAutoClosureDiscriminator) && "Recursive top-level decls");
+
+  if (expectedNextAutoclosureDiscriminator)
+    ctx.NextAutoClosureDiscriminator = setLocalDiscriminators.NextDiscriminator;
+
+  return setLocalDiscriminators.NextDiscriminator -
+      expectedNextAutoclosureDiscriminator.value_or(0);
 }
 
 /// Emits an error with a fixit for the case of unnecessary cast over a

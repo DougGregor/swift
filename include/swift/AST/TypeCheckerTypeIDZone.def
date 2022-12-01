@@ -446,3 +446,6 @@ SWIFT_REQUEST(TypeChecker, GetTypeWrapperInitializer,
 SWIFT_REQUEST(TypeChecker, MacroDefinitionRequest,
               MacroDefinition(MacroDecl *),
               Cached, NoLocationInfo)
+SWIFT_REQUEST(TypeChecker, LocalDiscriminatorsRequest,
+              unsigned(DeclContext *),
+              Cached, NoLocationInfo)
