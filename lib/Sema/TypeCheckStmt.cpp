@@ -232,10 +232,6 @@ namespace {
         Optional<unsigned> nextDiscriminator
     ) : Pass(None), NextDiscriminator(nextDiscriminator.getValueOr(0)) {}
 
-    LazyInitializerWalking getLazyInitializerWalkingBehavior() override {
-      return LazyInitializerWalking::InAccessor;
-    }
-
     /// Setup the next pass.
     ///
     /// \returns true when there is a next pass, false when there are no
@@ -324,8 +320,8 @@ unsigned LocalDiscriminatorsRequest::evaluate(
 ) const {
   ASTContext &ctx = dc->getASTContext();
 
+  // Autoclosures aren't their own contexts; look to the parent instead.
   if (auto autoclosure = dyn_cast<AutoClosureExpr>(dc)) {
-    // Autoclosures aren't their own contexts; look to the parent instead.
     return evaluateOrDefault(evaluator,
                              LocalDiscriminatorsRequest{dc->getParent()}, 0);
   }
@@ -334,6 +330,19 @@ unsigned LocalDiscriminatorsRequest::evaluate(
   ASTNode node;
   if (auto func = dyn_cast<AbstractFunctionDecl>(dc)) {
     node = func->getBody();
+
+    // Accessors for lazy properties should be walked as part of the property's
+    // pattern.
+    if (auto accessor = dyn_cast<AccessorDecl>(func)) {
+      if (accessor->isImplicit() &&
+          accessor->getStorage()->getAttrs().hasAttribute<LazyAttr>()) {
+        if (auto var = dyn_cast<VarDecl>(accessor->getStorage())) {
+          if (auto binding = var->getParentPatternBinding()) {
+            node = binding;
+          }
+        }
+      }
+    }
   } else if (auto closure = dyn_cast<ClosureExpr>(dc)) {
     node = closure->getBody();
   } else if (auto topLevel = dyn_cast<TopLevelCodeDecl>(dc)) {
@@ -350,6 +359,19 @@ unsigned LocalDiscriminatorsRequest::evaluate(
       return 0;
 
     node = param->getTypeCheckedDefaultExpr();
+  } else if (auto propertyWrapperInit =
+                 dyn_cast<PropertyWrapperInitializer>(dc)) {
+    auto var = propertyWrapperInit->getWrappedVar();
+    auto initInfo = var->getPropertyWrapperInitializerInfo();
+    switch (propertyWrapperInit->getKind()) {
+    case PropertyWrapperInitializer::Kind::WrappedValue:
+      node = initInfo.getInitFromWrappedValue();
+      break;
+
+    case PropertyWrapperInitializer::Kind::ProjectedValue:
+      node = initInfo.getInitFromProjectedValue();
+      break;
+    }
   }
 
   if (!node)
