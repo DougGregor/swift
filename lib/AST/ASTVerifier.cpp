@@ -232,6 +232,10 @@ class Verifier : public ASTWalker {
       ClosureDiscriminators;
   DeclContext *CanonicalTopLevelSubcontext = nullptr;
 
+  typedef std::pair<DeclContext *, Identifier> MacroExpansionDiscriminatorKey;
+  llvm::DenseMap<MacroExpansionDiscriminatorKey, SmallBitVector>
+      MacroExpansionDiscriminators;
+
   Verifier(PointerUnion<ModuleDecl *, SourceFile *> M, DeclContext *DC)
       : M(M),
         Ctx(M.is<ModuleDecl *>() ? M.get<ModuleDecl *>()->getASTContext()
@@ -2369,6 +2373,48 @@ public:
 
         if (!strippedFrom->isEqual(strippedTo))
           error("possibly non-ABI safe conversion", E);
+      }
+    }
+
+    void verifyChecked(MacroExpansionExpr *expansion) {
+      Identifier macroName = expansion->getMacroName().getBaseIdentifier();
+      auto dc = getCanonicalDeclContext(expansion->getDeclContext());
+      MacroExpansionDiscriminatorKey key{dc, macroName};
+      auto &discriminatorSet = MacroExpansionDiscriminators[key];
+      unsigned discriminator = expansion->getDiscriminator();
+
+      if (discriminator >= discriminatorSet.size()) {
+        discriminatorSet.resize(discriminator+1);
+        discriminatorSet.set(discriminator);
+      } else if (discriminatorSet.test(discriminator)) {
+        Out << "a macro expansion must have a unique discriminator "
+            << "in its context\n";
+        expansion->dump(Out);
+        Out << "\n";
+        abort();
+      } else {
+        discriminatorSet.set(discriminator);
+      }
+    }
+
+    void verifyChecked(MacroExpansionDecl *expansion) {
+      Identifier macroName = expansion->getMacro().getBaseIdentifier();
+      auto dc = getCanonicalDeclContext(expansion->getDeclContext());
+      MacroExpansionDiscriminatorKey key{dc, macroName};
+      auto &discriminatorSet = MacroExpansionDiscriminators[key];
+      unsigned discriminator = expansion->getDiscriminator();
+
+      if (discriminator >= discriminatorSet.size()) {
+        discriminatorSet.resize(discriminator+1);
+        discriminatorSet.set(discriminator);
+      } else if (discriminatorSet.test(discriminator)) {
+        Out << "a macro expansion must have a unique discriminator "
+            << "in its context\n";
+        expansion->dump(Out);
+        Out << "\n";
+        abort();
+      } else {
+        discriminatorSet.set(discriminator);
       }
     }
 
