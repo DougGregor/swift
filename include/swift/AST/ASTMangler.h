@@ -26,6 +26,7 @@ namespace swift {
 
 class AbstractClosureExpr;
 class ConformancePath;
+class MacroExpansionExpr;
 class RootProtocolConformance;
 
 namespace Mangle {
@@ -364,6 +365,10 @@ public:
   std::string
   mangleRuntimeAttributeGeneratorEntity(const ValueDecl *decl, CustomAttr *attr,
                                         SymbolKind SKind = SymbolKind::Default);
+
+  std::string mangleMacroExpansion(const MacroExpansionExpr *expansion);
+  void appendMacroExpansionContext(SourceLoc loc, DeclContext *origDC);
+  void appendMacroExpansionOperator(unsigned discriminator);
 
   enum SpecialContext {
     ObjCContext,

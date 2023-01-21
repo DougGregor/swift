@@ -2868,6 +2868,13 @@ ManglingError Remangler::mangleMacro(Node *node, unsigned depth) {
   return ManglingError::Success;
 }
 
+ManglingError Remangler::mangleMacroExpansion(Node *node, unsigned depth) {
+  RETURN_IF_ERROR(mangleChildNodes(node, depth + 1));
+  Buffer << "fM";
+  RETURN_IF_ERROR(mangleIndex(node, depth + 1));
+  return ManglingError::Success;
+}
+
 ManglingError Remangler::mangleSuffix(Node *node, unsigned depth) {
   // Just add the suffix back on.
   Buffer << node->getText();

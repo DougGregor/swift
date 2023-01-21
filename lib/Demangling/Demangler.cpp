@@ -3590,6 +3590,7 @@ NodePointer Demangler::demangleFunctionEntity() {
       Kind = Node::Kind::RuntimeAttributeGenerator;
       break;
     case 'm': return demangleEntity(Node::Kind::Macro);
+    case 'M': Args = Index; Kind = Node::Kind::MacroExpansion; break;
     case 'p': return demangleEntity(Node::Kind::GenericTypeParamDecl);
     case 'P':
       Args = None;

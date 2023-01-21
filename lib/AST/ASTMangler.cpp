@@ -31,6 +31,7 @@
 #include "swift/AST/ProtocolConformanceRef.h"
 #include "swift/AST/SILLayout.h"
 #include "swift/Basic/Defer.h"
+#include "swift/Basic/SourceManager.h"
 #include "swift/ClangImporter/ClangImporter.h"
 #include "swift/Demangling/Demangler.h"
 #include "swift/Demangling/ManglingMacros.h"
@@ -3349,6 +3350,12 @@ void ASTMangler::appendEntity(const ValueDecl *decl) {
     return appendEntity(decl, "fp", decl->isStatic());
   if (auto macro = dyn_cast<MacroDecl>(decl))
     return appendEntity(decl, "fm", false);
+  if (auto expansion = dyn_cast<MacroExpansionDecl>(decl)) {
+    appendMacroExpansionContext(
+        expansion->getLoc(), expansion->getDeclContext());
+    appendMacroExpansionOperator(expansion->getDiscriminator());
+    return;
+  }
 
   assert(isa<AbstractFunctionDecl>(decl) || isa<EnumElementDecl>(decl));
 
@@ -3672,6 +3679,75 @@ std::string ASTMangler::mangleRuntimeAttributeGeneratorEntity(
   beginMangling();
   appendRuntimeAttributeGeneratorEntity(decl, attr);
   appendSymbolKind(SKind);
+  return finalize();
+}
+
+void ASTMangler::appendMacroExpansionContext(
+    SourceLoc loc, DeclContext *origDC
+) {
+  if (loc.isInvalid())
+    return appendContext(origDC, StringRef());
+
+  ASTContext &ctx = origDC->getASTContext();
+  SourceManager &sourceMgr = ctx.SourceMgr;
+
+  auto bufferID = sourceMgr.findBufferContainingLoc(loc);
+  auto generatedSourceInfo = sourceMgr.getGeneratedSourceInfo(bufferID);
+  if (!generatedSourceInfo)
+    return appendContext(origDC, StringRef());
+
+  SourceLoc outerExpansionLoc;
+  DeclContext *outerExpansionDC = nullptr;
+  unsigned discriminator;
+  switch (generatedSourceInfo->kind) {
+  case GeneratedSourceInfo::ExpressionMacroExpansion: {
+    auto expansion =
+        cast<MacroExpansionExpr>(
+                             ASTNode::getFromOpaqueValue(generatedSourceInfo->astNode)
+                             .get<Expr *>());
+    outerExpansionLoc = expansion->getLoc();
+    outerExpansionDC = expansion->getDeclContext();
+    discriminator = expansion->getDiscriminator();
+    break;
+  }
+
+  case GeneratedSourceInfo::FreestandingDeclMacroExpansion: {
+    auto expansion =
+        cast<MacroExpansionDecl>(
+          ASTNode::getFromOpaqueValue(generatedSourceInfo->astNode)
+            .get<Decl *>());
+    outerExpansionLoc = expansion->getLoc();
+    outerExpansionDC = expansion->getDeclContext();
+    discriminator = expansion->getDiscriminator();
+    break;
+  }
+
+  case GeneratedSourceInfo::AccessorMacroExpansion:
+  case GeneratedSourceInfo::MemberAttributeMacroExpansion:
+  case GeneratedSourceInfo::PrettyPrinted:
+  case GeneratedSourceInfo::ReplacedFunctionBody:
+    return appendContext(origDC, StringRef());
+  }
+
+  // If we hit the point where the structure is represented as a DeclContext,
+  // we're done.
+  if (origDC->isChildContextOf(outerExpansionDC))
+    return appendContext(origDC, StringRef());
+
+  // Append our own context and discriminator.
+  appendMacroExpansionContext(outerExpansionLoc, origDC);
+  appendMacroExpansionOperator(discriminator);
+}
+
+void ASTMangler::appendMacroExpansionOperator(unsigned discriminator) {
+  appendOperator("fM", Index(discriminator));
+}
+
+std::string ASTMangler::mangleMacroExpansion(
+    const MacroExpansionExpr *expansion) {
+  beginMangling();
+  appendMacroExpansionContext(expansion->getLoc(), expansion->getDeclContext());
+  appendMacroExpansionOperator(expansion->getDiscriminator());
   return finalize();
 }
 
