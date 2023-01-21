@@ -23,6 +23,7 @@
 #include "swift/AST/GenericSignature.h"
 #include "swift/AST/Initializer.h"
 #include "swift/AST/LazyResolver.h"
+#include "swift/AST/MacroDiscriminatorContext.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/Ownership.h"
 #include "swift/AST/ParameterList.h"
@@ -3696,43 +3697,21 @@ void ASTMangler::appendMacroExpansionContext(
   if (!generatedSourceInfo)
     return appendContext(origDC, StringRef());
 
+  auto parent = MacroDiscriminatorContext::getParentOf(loc, origDC);
+  if (auto dc = parent.dyn_cast<DeclContext *>())
+    return appendContext(dc, StringRef());
+
   SourceLoc outerExpansionLoc;
-  DeclContext *outerExpansionDC = nullptr;
   unsigned discriminator;
-  switch (generatedSourceInfo->kind) {
-  case GeneratedSourceInfo::ExpressionMacroExpansion: {
-    auto expansion =
-        cast<MacroExpansionExpr>(
-                             ASTNode::getFromOpaqueValue(generatedSourceInfo->astNode)
-                             .get<Expr *>());
-    outerExpansionLoc = expansion->getLoc();
-    outerExpansionDC = expansion->getDeclContext();
-    discriminator = expansion->getDiscriminator();
-    break;
-  }
 
-  case GeneratedSourceInfo::FreestandingDeclMacroExpansion: {
-    auto expansion =
-        cast<MacroExpansionDecl>(
-          ASTNode::getFromOpaqueValue(generatedSourceInfo->astNode)
-            .get<Decl *>());
-    outerExpansionLoc = expansion->getLoc();
-    outerExpansionDC = expansion->getDeclContext();
-    discriminator = expansion->getDiscriminator();
-    break;
+  if (auto expr = parent.dyn_cast<MacroExpansionExpr *>()) {
+    outerExpansionLoc = expr->getLoc();
+    discriminator = expr->getDiscriminator();
+  } else {
+    auto decl = parent.get<MacroExpansionDecl *>();
+    outerExpansionLoc = decl->getLoc();
+    discriminator = decl->getDiscriminator();
   }
-
-  case GeneratedSourceInfo::AccessorMacroExpansion:
-  case GeneratedSourceInfo::MemberAttributeMacroExpansion:
-  case GeneratedSourceInfo::PrettyPrinted:
-  case GeneratedSourceInfo::ReplacedFunctionBody:
-    return appendContext(origDC, StringRef());
-  }
-
-  // If we hit the point where the structure is represented as a DeclContext,
-  // we're done.
-  if (origDC->isChildContextOf(outerExpansionDC))
-    return appendContext(origDC, StringRef());
 
   // Append our own context and discriminator.
   appendMacroExpansionContext(outerExpansionLoc, origDC);
