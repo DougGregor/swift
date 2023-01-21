@@ -231,8 +231,8 @@ namespace {
     /// Local declaration discriminators.
     llvm::SmallDenseMap<Identifier, unsigned> DeclDiscriminators;
 
-    /// Macro expansion discriminators.
-    llvm::SmallDenseMap<Identifier, unsigned> MacroDiscriminators;
+    /// Macro expansion discriminator.
+    unsigned NextMacroExpansionDiscriminator = 0;
 
   public:
     SetLocalDiscriminators(
@@ -294,9 +294,22 @@ namespace {
       if (auto macroExpansion = dyn_cast<MacroExpansionExpr>(E)) {
         if (macroExpansion->getRawDiscriminator() ==
               MacroExpansionExpr::InvalidDiscriminator) {
-          Identifier name = macroExpansion->getMacroName().getBaseIdentifier();
-          macroExpansion->setDiscriminator(MacroDiscriminators[name]++);
+          macroExpansion->setDiscriminator(NextMacroExpansionDiscriminator++);
         }
+
+        // Walk the arguments.
+        if (auto args = macroExpansion->getArgs())
+          args->walk(*this);
+
+        // If there is a rewritten expression, walk it with a fresh macro
+        // discriminator.
+        if (auto rewritten = macroExpansion->getRewritten()) {
+          llvm::SaveAndRestore<unsigned> savedMacroDiscriminator(
+              NextMacroExpansionDiscriminator, 0u);
+          rewritten->walk(*this);
+        }
+
+        return Action::SkipChildren(E);
       }
 
       // Caller-side default arguments need their @autoclosures checked.
@@ -333,8 +346,7 @@ namespace {
       if (auto macroExpansion = dyn_cast<MacroExpansionDecl>(D)) {
         if (macroExpansion->getRawDiscriminator() ==
               MacroExpansionDecl::InvalidDiscriminator) {
-          Identifier name = macroExpansion->getMacro().getBaseIdentifier();
-          macroExpansion->setDiscriminator(MacroDiscriminators[name]++);
+          macroExpansion->setDiscriminator(NextMacroExpansionDiscriminator++);
         }
       }
 
