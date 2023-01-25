@@ -1339,8 +1339,8 @@ NodePointer NodePrinter::print(NodePointer Node, unsigned depth,
                        /*hasName*/ true);
   case Node::Kind::MacroExpansion:
     return printEntity(Node, depth, asPrefixContext, TypePrinting::NoType,
-                       /*hasName*/false, "macro expansion #",
-                       (int)Node->getChild(1)->getIndex() + 1);
+                       /*hasName*/true, "macro expansion #",
+                       (int)Node->getChild(2)->getIndex() + 1);
   case Node::Kind::GenericTypeParamDecl:
     return printEntity(Node, depth, asPrefixContext, TypePrinting::NoType,
                        /*hasName*/ true);

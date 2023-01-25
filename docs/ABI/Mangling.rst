@@ -393,7 +393,9 @@ Entities
   RELATED-DISCRIMINATOR ::= [a-j]
   RELATED-DISCRIMINATOR ::= [A-J]
 
-  macro-discriminator-list ::= macro-discriminator-list? 'fM' INDEX
+  macro-discriminator-list ::= macro-discriminator-list? 'fM' macro-expansion-operator INDEX
+
+  macro-expansion-operator ::= 'f' // freestanding macro
 
   file-discriminator ::= identifier 'Ll'     // anonymous file-discriminated declaration
 

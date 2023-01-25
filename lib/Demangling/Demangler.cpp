@@ -3590,7 +3590,7 @@ NodePointer Demangler::demangleFunctionEntity() {
       Kind = Node::Kind::RuntimeAttributeGenerator;
       break;
     case 'm': return demangleEntity(Node::Kind::Macro);
-    case 'M': Args = Index; Kind = Node::Kind::MacroExpansion; break;
+    case 'M': return demangleMacroExpansion();
     case 'p': return demangleEntity(Node::Kind::GenericTypeParamDecl);
     case 'P':
       Args = None;
@@ -3889,4 +3889,11 @@ NodePointer Demangler::demangleValueWitness() {
   NodePointer VW = createNode(Node::Kind::ValueWitness);
   addChild(VW, createNode(Node::Kind::Index, unsigned(Kind)));
   return addChild(VW, popNode(Node::Kind::Type));
+}
+
+NodePointer Demangler::demangleMacroExpansion() {
+  NodePointer name = popNode(Node::Kind::Identifier);
+  NodePointer context = popContext();
+  NodePointer discriminator = demangleIndexAsNode();
+  return createWithChildren(Node::Kind::MacroExpansion, context, name, discriminator);
 }

@@ -2869,10 +2869,10 @@ ManglingError Remangler::mangleMacro(Node *node, unsigned depth) {
 }
 
 ManglingError Remangler::mangleMacroExpansion(Node *node, unsigned depth) {
-  RETURN_IF_ERROR(mangleChildNodes(node, depth + 1));
+  RETURN_IF_ERROR(mangleChildNode(node, 0, depth + 1));
+  RETURN_IF_ERROR(mangleChildNode(node, 1, depth + 1));
   Buffer << "fM";
-  RETURN_IF_ERROR(mangleIndex(node, depth + 1));
-  return ManglingError::Success;
+  return mangleChildNode(node, 2, depth + 1);
 }
 
 ManglingError Remangler::mangleSuffix(Node *node, unsigned depth) {

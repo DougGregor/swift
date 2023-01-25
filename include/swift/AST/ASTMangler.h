@@ -367,8 +367,10 @@ public:
                                         SymbolKind SKind = SymbolKind::Default);
 
   std::string mangleMacroExpansion(const MacroExpansionExpr *expansion);
+  std::string mangleMacroExpansion(const MacroExpansionDecl *expansion);
   void appendMacroExpansionContext(SourceLoc loc, DeclContext *origDC);
-  void appendMacroExpansionOperator(unsigned discriminator);
+  void appendMacroExpansionOperator(
+      StringRef macroName, unsigned discriminator);
 
   enum SpecialContext {
     ObjCContext,

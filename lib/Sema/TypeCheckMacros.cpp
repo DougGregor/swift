@@ -479,6 +479,8 @@ Expr *swift::expandMacroExpr(
     Mangle::ASTMangler mangler;
     if (auto expansionExpr = dyn_cast<MacroExpansionExpr>(expr))
       bufferName = mangler.mangleMacroExpansion(expansionExpr);
+    else
+      bufferName = "<macro expansion>";
   }
 
   // Dump macro expansions to standard output, if requested.

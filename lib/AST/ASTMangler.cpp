@@ -3354,7 +3354,9 @@ void ASTMangler::appendEntity(const ValueDecl *decl) {
   if (auto expansion = dyn_cast<MacroExpansionDecl>(decl)) {
     appendMacroExpansionContext(
         expansion->getLoc(), expansion->getDeclContext());
-    appendMacroExpansionOperator(expansion->getDiscriminator());
+    appendMacroExpansionOperator(
+        expansion->getMacro().getBaseName().userFacingName(),
+        expansion->getDiscriminator());
     return;
   }
 
@@ -3702,23 +3704,28 @@ void ASTMangler::appendMacroExpansionContext(
     return appendContext(dc, StringRef());
 
   SourceLoc outerExpansionLoc;
+  DeclBaseName baseName;
   unsigned discriminator;
-
   if (auto expr = parent.dyn_cast<MacroExpansionExpr *>()) {
     outerExpansionLoc = expr->getLoc();
+    baseName = expr->getMacroName().getBaseName();
     discriminator = expr->getDiscriminator();
   } else {
     auto decl = parent.get<MacroExpansionDecl *>();
     outerExpansionLoc = decl->getLoc();
+    baseName = decl->getMacro().getBaseName();
     discriminator = decl->getDiscriminator();
   }
 
   // Append our own context and discriminator.
   appendMacroExpansionContext(outerExpansionLoc, origDC);
-  appendMacroExpansionOperator(discriminator);
+  appendMacroExpansionOperator(baseName.userFacingName(), discriminator);
 }
 
-void ASTMangler::appendMacroExpansionOperator(unsigned discriminator) {
+void ASTMangler::appendMacroExpansionOperator(
+    StringRef macroName, unsigned discriminator
+) {
+  appendIdentifier(macroName);
   appendOperator("fM", Index(discriminator));
 }
 
@@ -3726,7 +3733,19 @@ std::string ASTMangler::mangleMacroExpansion(
     const MacroExpansionExpr *expansion) {
   beginMangling();
   appendMacroExpansionContext(expansion->getLoc(), expansion->getDeclContext());
-  appendMacroExpansionOperator(expansion->getDiscriminator());
+  appendMacroExpansionOperator(
+      expansion->getMacroName().getBaseName().userFacingName(),
+      expansion->getDiscriminator());
+  return finalize();
+}
+
+std::string ASTMangler::mangleMacroExpansion(
+    const MacroExpansionDecl *expansion) {
+  beginMangling();
+  appendMacroExpansionContext(expansion->getLoc(), expansion->getDeclContext());
+  appendMacroExpansionOperator(
+      expansion->getMacro().getBaseName().userFacingName(),
+      expansion->getDiscriminator());
   return finalize();
 }
 
