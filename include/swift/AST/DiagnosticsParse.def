@@ -2028,8 +2028,6 @@ ERROR(foreign_diagnostic,none,
 //------------------------------------------------------------------------------
 // MARK: macros
 //------------------------------------------------------------------------------
-ERROR(expected_macro_value_type,PointsToFirstBadToken,
-      "expected macro value type following ':'", ())
 ERROR(expected_lparen_macro,PointsToFirstBadToken,
       "expected '(' for macro parameters or ':' for a value-like macro", ())
 ERROR(expected_type_macro_result,PointsToFirstBadToken,
@@ -2042,12 +2040,13 @@ ERROR(macro_expansion_expr_expected_macro_identifier,PointsToFirstBadToken,
 ERROR(macro_expansion_decl_expected_macro_identifier,PointsToFirstBadToken,
       "expected a macro identifier for a pound literal declaration", ())
 
-ERROR(declaration_attr_expected_kind,PointsToFirstBadToken,
-      "expected a declaration macro kind ('freestanding' or 'attached')", ())
-
 ERROR(macro_role_attr_expected_kind,PointsToFirstBadToken,
       "expected %select{a freestanding|an attached}0 macro role such as "
       "%select{'expression'|'accessor'}0", (bool))
+ERROR(macro_role_attr_expected_attached_kind,PointsToFirstBadToken,
+      "expected an attached macro role such as 'peer'", ())
+ERROR(macro_role_attr_expected_freestanding_kind,PointsToFirstBadToken,
+      "expected a freestanding macro role such as 'expression'", ())
 ERROR(macro_role_syntax_mismatch,PointsToFirstBadToken,
       "%select{a freestanding|an attached}0 macro cannot have the %1 role",
       (bool, Identifier))

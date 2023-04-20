@@ -9,7 +9,7 @@
 
 @attached(
   member,
-  names: named(Storage), named(storage), named(getStorage), named(method), named(`init`)
+  names: named(init), named(Storage), named(storage), named(getStorage()), named(method),
 )
 macro addMembers() = #externalMacro(module: "MacroDefinition", type: "AddMembers")
 

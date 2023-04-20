@@ -2384,6 +2384,46 @@ Parser::parseMacroRoleAttribute(
     return makeParserError();
   }
 
+  // Parse the argments.
+  SourceLoc lParenLoc = consmeToken();
+  SourceLoc rParenLoc;
+  Optional<MacroRole> role;
+  bool sawRole = false;
+  bool sawNames = false;
+  SmallVector<MacroIntroducedDeclName, 2> names;
+  auto argmentsStatus = parseList(tok::r_paren, lParenLoc, rParenLoc,
+                                  /*AllowSepAfterLast=*/false,
+                                  diag::expected_rparen_expr_list,
+                                  [&] {
+    // Parse the argment label, if there is one.
+    Identifier fieldName;
+    SourceLoc fieldNameLoc;
+    parseOptionalArgumentLabel(fieldName, fieldNameLoc);
+
+    if (!sawRole) {
+      // There should not be any argument label.
+      auto diagKind = isAttached ? diag::macro_role_attr_expected_attached_kind
+                                 : macro_role_attr_expected_freestanding_kind;
+      if (firstNameLoc.isValid()) {
+        
+      }
+
+      // Parse the role.
+      Identifier id;
+      SourceLoc idLoc;
+      if (parseIdentifier(id, idLoc, diagKind)) {
+        return makeParserError();
+      }
+
+
+    }
+
+
+    // Parse the identifier.
+
+    if (!sawRole && parseIdentifier(id, idLoc, , true))
+  });
+
   // Parse an argument list. We'll pick out the pieces from here.
   auto argListResult = parseArgumentList(
       tok::l_paren, tok::r_paren, /*isExprBasic*/ true,
