@@ -620,6 +620,14 @@ void toolchains::Darwin::addCommonFrontendArgs(
   }
 }
 
+void toolchains::Darwin::addPlatformSpecificPluginFrontendArgs(
+    const OutputInfo &OI,
+    const CommandOutput &output,
+    const llvm::opt::ArgList &inputArgs,
+    llvm::opt::ArgStringList &arguments) const {
+  
+}
+
 ToolChain::InvocationInfo
 toolchains::Darwin::constructInvocation(const DynamicLinkJobAction &job,
                                         const JobContext &context) const {
