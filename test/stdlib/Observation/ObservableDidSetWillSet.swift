@@ -1,6 +1,6 @@
 // REQUIRES: swift_swift_parser, executable_test
 
-// RUN: %target-run-simple-swift( -Xfrontend -disable-availability-checking -enable-experimental-feature InitAccessors -enable-experimental-feature Macros -Xfrontend -plugin-path -Xfrontend %swift-host-lib-dir/plugins) | %FileCheck %s
+// RUN: %target-run-simple-swift( -Xfrontend -disable-availability-checking -enable-experimental-feature InitAccessors -Xfrontend -plugin-path -Xfrontend %swift-host-lib-dir/plugins) | %FileCheck %s
 
 // Asserts is required for '-enable-experimental-feature InitAccessors'.
 // REQUIRES: asserts
@@ -38,7 +38,13 @@ let m = Model()
 
 // CHECK: new state=running
 // CHECK: old state=initializing
-m.state = .running
+withObservationTracking {
+  m.state = .running
+} onChange: {
+  // CHECK: Something changed!
+  print("Something changed!")
+}
+
 // CHECK: new state=complete
 // CHECK: old state=running
 m.state = .complete
