@@ -1,3 +1,4 @@
+# easy_install -U Sphinx==1.3.4
 <img src="https://swift.org/assets/images/swift.svg" alt="Swift logo" height="70" >
 # Swift Programming Language
 
