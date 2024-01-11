@@ -45,6 +45,10 @@ struct MacroExpansionInfo : ASTAllocated<MacroExpansionInfo> {
   /// The referenced macro.
   ConcreteDeclRef macroRef;
 
+  enum : unsigned { InvalidDiscriminator = 0xFFFF };
+
+  unsigned Discriminator = InvalidDiscriminator;
+  
   MacroExpansionInfo(SourceLoc sigilLoc, DeclNameRef moduleName,
                      DeclNameLoc moduleNameLoc, DeclNameRef macroName,
                      DeclNameLoc macroNameLoc, SourceLoc leftAngleLoc,
@@ -71,13 +75,13 @@ enum class FreestandingMacroKind {
 /// A base class of either 'MacroExpansionExpr' or 'MacroExpansionDecl'.
 class FreestandingMacroExpansion {
   llvm::PointerIntPair<MacroExpansionInfo *, 1, FreestandingMacroKind>
-      infoAndKind;
-
+  infoAndKind;
+  
 protected:
   FreestandingMacroExpansion(FreestandingMacroKind kind,
                              MacroExpansionInfo *info)
-      : infoAndKind(info, kind) {}
-
+  : infoAndKind(info, kind) {}
+  
 public:
   MacroExpansionInfo *getExpansionInfo() const {
     return infoAndKind.getPointer();
@@ -85,11 +89,11 @@ public:
   FreestandingMacroKind getFreestandingMacroKind() const {
     return infoAndKind.getInt();
   }
-
+  
   ASTNode getASTNode();
-
+  
   SourceLoc getPoundLoc() const { return getExpansionInfo()->SigilLoc; }
-
+  
   DeclNameLoc getModuleNameLoc() const {
     return getExpansionInfo()->ModuleNameLoc;
   }
@@ -98,23 +102,29 @@ public:
     return getExpansionInfo()->MacroNameLoc;
   }
   DeclNameRef getMacroName() const { return getExpansionInfo()->MacroName; }
-
+  
   ArrayRef<TypeRepr *> getGenericArgs() const {
     return getExpansionInfo()->GenericArgs;
   }
   SourceRange getGenericArgsRange() const {
     return getExpansionInfo()->getGenericArgsRange();
   }
-
+  
   ArgumentList *getArgs() const { return getExpansionInfo()->ArgList; }
   void setArgs(ArgumentList *args) { getExpansionInfo()->ArgList = args; }
-
+  
   ConcreteDeclRef getMacroRef() const { return getExpansionInfo()->macroRef; }
   void setMacroRef(ConcreteDeclRef ref) { getExpansionInfo()->macroRef = ref; }
-
+  
   DeclContext *getDeclContext() const;
   SourceRange getSourceRange() const;
+  
+  /// Returns a discriminator which determines this macro expansion's index
+  /// in the sequence of macro expansions within the current context.
   unsigned getDiscriminator() const;
+  
+  /// Returns the raw discriminator, for debugging purposes only.
+  unsigned getRawDiscriminator() const;
 };
 
 } // namespace swift

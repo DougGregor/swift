@@ -11653,7 +11653,6 @@ MacroExpansionDecl::MacroExpansionDecl(DeclContext *dc,
                                        MacroExpansionInfo *info)
     : Decl(DeclKind::MacroExpansion, dc),
       FreestandingMacroExpansion(FreestandingMacroKind::Decl, info) {
-  Bits.MacroExpansionDecl.Discriminator = InvalidDiscriminator;
 }
 
 MacroExpansionDecl *
@@ -11675,23 +11674,6 @@ MacroExpansionDecl::create(
                          genericArgs,
                          args ? args : ArgumentList::createImplicit(ctx, {})};
   return new (ctx) MacroExpansionDecl(dc, info);
-}
-
-unsigned MacroExpansionDecl::getDiscriminator() const {
-  if (getRawDiscriminator() != InvalidDiscriminator)
-    return getRawDiscriminator();
-
-  auto mutableThis = const_cast<MacroExpansionDecl *>(this);
-  auto dc = getDeclContext();
-  ASTContext &ctx = dc->getASTContext();
-  auto discriminatorContext =
-      MacroDiscriminatorContext::getParentOf(mutableThis);
-  mutableThis->setDiscriminator(
-      ctx.getNextMacroDiscriminator(
-          discriminatorContext, getMacroName().getBaseName()));
-
-  assert(getRawDiscriminator() != InvalidDiscriminator);
-  return getRawDiscriminator();
 }
 
 void MacroExpansionDecl::forEachExpandedNode(

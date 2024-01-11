@@ -2049,6 +2049,12 @@ unsigned ASTContext::getNextMacroDiscriminator(
 ) {
   std::pair<const void *, Identifier> key(
       context.getOpaqueValue(), baseName.getIdentifier());
+
+  if (auto macroDC = context.dyn_cast<DeclContext *>()) {
+    llvm::errs() << "Discriminator is " << getImpl().NextMacroDiscriminator[key] << "\n";
+    macroDC->dumpContext();
+  }
+  
   return getImpl().NextMacroDiscriminator[key]++;
 }
 
