@@ -2569,3 +2569,20 @@ void ParamCaptureInfoRequest::cacheResult(CaptureInfo info) const {
   auto *param = std::get<0>(getStorage());
   param->setDefaultArgumentCaptureInfo(info);
 }
+
+//----------------------------------------------------------------------------//
+// IsUnsafeRequest computation.
+//----------------------------------------------------------------------------//
+
+std::optional<bool> IsUnsafeRequest::getCachedResult() const {
+  auto *decl = std::get<0>(getStorage());
+  if (!decl->isUnsafeComputed())
+    return std::nullopt;
+
+  return decl->isUnsafeRaw();
+}
+
+void IsUnsafeRequest::cacheResult(bool value) const {
+  auto *decl = std::get<0>(getStorage());
+  decl->setUnsafe(value);
+}

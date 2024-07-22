@@ -1004,6 +1004,13 @@ bool Decl::preconcurrency() const {
   return false;
 }
 
+bool Decl::isUnsafe() const {
+  return evaluateOrDefault(
+      getASTContext().evaluator,
+      IsUnsafeRequest{const_cast<Decl *>(this)},
+      false);
+}
+
 Type AbstractFunctionDecl::getThrownInterfaceType() const {
   if (!getThrownTypeRepr())
     return ThrownType.getType();

@@ -3121,3 +3121,22 @@ LifetimeDependenceInfoRequest::evaluate(Evaluator &evaluator,
                                         AbstractFunctionDecl *decl) const {
   return LifetimeDependenceInfo::get(decl);
 }
+
+//----------------------------------------------------------------------------//
+// IsUnsafeRequest
+//----------------------------------------------------------------------------//
+
+bool IsUnsafeRequest::evaluate(Evaluator &evaluator, Decl *decl) const {
+  // If it's marked @unsafe, it's unsafe.
+  if (decl->getAttrs().hasAttribute<UnsafeAttr>())
+    return true;
+
+  // Inference: A member of an @unsafe type is also unsafe.
+  if (auto enclosingDC = decl->getDeclContext()) {
+    if (auto enclosingNominal = enclosingDC->getSelfNominalTypeDecl())
+      if (enclosingNominal->isUnsafe())
+        return true;
+  }
+
+  return false;
+}
