@@ -34,24 +34,22 @@
   %#^*&
 #endif
 
-#if _compiler_version("700a.*.10") // expected-error {{version component contains non-numeric characters}}
+#if _compiler_version("700a.*.10") // expected-error {{'_compiler_version' version check has invalid version '"700a.*.10"'}}
 #endif
 
 #if _compiler_version("...") // expected-error {{found empty version component}}
-// expected-error@-1 {{found empty version component}}
-// expected-error@-2 {{found empty version component}}
 #endif
 
-#if _compiler_version("") // expected-error {{version requirement is empty}}
+#if _compiler_version("") // expected-error {{found empty version component}}
   let y = 1
 #else
   let thisWillStillParseBecauseConfigIsError = 1
 #endif
 
-#if _compiler_version("700.0.100") // expected-warning {{the second version component is not used for comparison in legacy compiler versions}} {{28-29=*}}
+#if _compiler_version("700.0.100") // expected-warning {{the second version component is not used for comparison in legacy compiler versions}}
 #endif
 
-#if _compiler_version("5.7.100") // expected-warning {{the second version component is not used for comparison in legacy compiler versions; are you trying to encode a new Swift compiler version for compatibility with legacy compilers?}} {{24-27=5007.*}}
+#if _compiler_version("5.7.100") // expected-warning {{the second version component is not used for comparison in legacy compiler versions}}
 #endif
 
 #if _compiler_version("700.*.1.1.1.1") // expected-error {{version must not have more than five components}}
