@@ -416,19 +416,27 @@ public class KeyPath<Root, Value>: PartialKeyPath<Root> {
       }
 
 #if hasFeature(Embedded)
-      // Multi-component key paths in Embedded Swift are always chains of
-      // fixed-offset stored / tuple components (enforced by the IRGen
-      // static-instance emitter — see `KeyPathInst::
-      // getStaticInstanceClassType`).  Walk them with byte-level pointer
-      // arithmetic, without generic dispatch on `Any.Type`.  Class-typed
-      // intermediates stay alive because the outer container (the root
-      // value, or an outer class we've already walked through) still
-      // holds a strong reference to them for the duration of `root`'s
-      // lifetime.
-      return unsafe withUnsafePointer(to: root) { rootPtr in
-        var current = unsafe UnsafeRawPointer(rootPtr)
+      // Multi-component key paths in Embedded Swift are chains of
+      // fixed-offset stored / tuple / class components, possibly
+      // interleaved with read-only computed / method components (see
+      // `KeyPathInst::getStaticInstanceClassType`).  Walk them with
+      // byte-level pointer arithmetic, without generic dispatch on
+      // `Any.Type`.  Class-typed intermediates stay alive because the
+      // outer container (the root value, or an outer class we've already
+      // walked through) still holds a strong reference to them for the
+      // duration of `root`'s lifetime.
+      //
+      // A computed component reads via the KP accessor thunk, which
+      // requires the intermediate value's storage.  For those we
+      // recursively descend, allocating a temporary buffer sized to the
+      // intermediate type (queried from the type-metadata pointer already
+      // present in the buffer), invoking the getter thunk with the sret
+      // ABI via a C shim, and destroying the temporary after the tail of
+      // the chain is done.
+      func project(current: UnsafeRawPointer) -> Value {
+        var current = unsafe current
         while unsafe !buffer.data.isEmpty {
-          let (rawComponent, _) = unsafe buffer.next()
+          let (rawComponent, optNextType) = unsafe buffer.next()
           switch unsafe rawComponent.value {
           case .struct(let offset):
             unsafe current = unsafe current.advanced(by: offset)
@@ -436,12 +444,55 @@ public class KeyPath<Root, Value>: PartialKeyPath<Root> {
             let obj = unsafe current.load(as: AnyObject.self)
             unsafe current = unsafe UnsafeRawPointer(
               Builtin.bridgeToRawPointer(obj)).advanced(by: offset)
+          case .get(id: _, accessors: let accessors, argument: let argument),
+               .mutatingGetSet(id: _, accessors: let accessors,
+                               argument: let argument),
+               .nonmutatingGetSet(id: _, accessors: let accessors,
+                                  argument: let argument):
+            let getterRaw = unsafe accessors.getterRaw
+            let argPtr = unsafe argument?.data.baseAddress
+              ?? accessors._value
+            let argSize = unsafe argument?.data.count ?? 0
+            guard let nextType = optNextType else {
+              // Last component: intermediate type is `Value`; emplace
+              // the result directly.
+              return unsafe Builtin.emplace {
+                (outPtr: Builtin.RawPointer) in
+                unsafe _swift_embedded_kp_invokeGetter(
+                  UnsafeMutableRawPointer(mutating: getterRaw),
+                  UnsafeMutableRawPointer(outPtr),
+                  current, argPtr, argSize)
+              }
+            }
+            // Intermediate: allocate scratch, call getter, recurse.
+            let metadata = unsafe unsafeBitCast(nextType,
+                to: UnsafeRawPointer.self)
+            let size = Int(unsafe _swift_embedded_metadata_get_size(
+                metadata))
+            let alignMask = Int(unsafe _swift_embedded_metadata_get_align_mask(
+                metadata))
+            return unsafe _withUnprotectedUnsafeTemporaryAllocation(
+              byteCount: size, alignment: alignMask + 1
+            ) { scratchBuf in
+              let scratch = unsafe scratchBuf.baseAddress
+                ._unsafelyUnwrappedUnchecked
+              unsafe _swift_embedded_kp_invokeGetter(
+                UnsafeMutableRawPointer(mutating: getterRaw),
+                scratch, current, argPtr, argSize)
+              defer {
+                unsafe _swift_embedded_metadata_destroy(metadata, scratch)
+              }
+              return unsafe project(current: UnsafeRawPointer(scratch))
+            }
           default:
             fatalError(
-              "Embedded Swift multi-component key path must be stored/tuple")
+              "Embedded Swift multi-component key path component kind not supported")
           }
         }
         return unsafe current.load(as: Value.self)
+      }
+      return unsafe withUnsafePointer(to: root) { rootPtr in
+        return unsafe project(current: UnsafeRawPointer(rootPtr))
       }
 #else
       let maxSize = unsafe buffer.maxSize
@@ -599,19 +650,51 @@ public class WritableKeyPath<Root, Value>: KeyPath<Root, Value> {
       }
 
 #if hasFeature(Embedded)
-      // Multi-component walker for chains of fixed-offset stored/tuple
-      // components.  All writable-KP chains projected here are pure struct
-      // / tuple (no class jump), because a chain that crosses a class
-      // boundary is a `ReferenceWritableKeyPath`.  So we can walk with
-      // plain pointer arithmetic — no writeback / keep-alive needed.
+      // Multi-component walker for WritableKeyPath chains.  Components
+      // are either fixed-offset stored / tuple (advance `p` by pointer
+      // arithmetic) or settable mutating computed (allocate scratch,
+      // call getter, chain a writeback that fires on scope exit — see
+      // `_EmbeddedMutatingWritebackBuffer`).  A chain that crosses a
+      // class boundary is a `ReferenceWritableKeyPath`, not a WK, so we
+      // never see `.class` here.
       while true {
         let (rawComponent, optNextType) = unsafe buffer.next()
         switch unsafe rawComponent.value {
         case .struct(let offset):
           unsafe p = unsafe p.advanced(by: offset)
+
+        case .mutatingGetSet(id: _, accessors: let accessors,
+                             argument: let argument):
+          // Base for the setter is the current pointer (into some parent
+          // struct storage).  Allocate scratch sized to NewValue,
+          // populate it via the getter, and stash the writeback.  The
+          // caller mutates through `p` (now → scratch); when the
+          // writeback's deinit fires it moves scratch → base via the
+          // setter.
+          guard let nextType = optNextType else {
+            // Last component: no scratch buffer needed; the caller will
+            // mutate the intermediate directly and then the writeback
+            // fires it back.  But we still need to know the value type
+            // metadata for size/alignment.  Fall through to the
+            // scratched path using `Value.self` for the metadata.
+            let metadata = unsafe unsafeBitCast(Value.self,
+                to: UnsafeRawPointer.self)
+            unsafe p = unsafe _embeddedInstallMutatingWriteback(
+              parentPtr: UnsafeMutableRawPointer(mutating: p),
+              accessors: accessors, argument: argument,
+              valueMetadata: metadata, keepAlive: &keepAlive)
+            break
+          }
+          let metadata = unsafe unsafeBitCast(nextType,
+              to: UnsafeRawPointer.self)
+          unsafe p = unsafe _embeddedInstallMutatingWriteback(
+            parentPtr: UnsafeMutableRawPointer(mutating: p),
+            accessors: accessors, argument: argument,
+            valueMetadata: metadata, keepAlive: &keepAlive)
+
         default:
           fatalError(
-            "Embedded Swift WritableKeyPath chain must be stored struct/tuple")
+            "Embedded Swift WritableKeyPath chain component kind not supported")
         }
         if optNextType == nil { break }
       }
@@ -685,37 +768,88 @@ public class ReferenceWritableKeyPath<
       }
 
 #if hasFeature(Embedded)
-      // Multi-component walker for chains of fixed-offset stored/tuple
-      // components (enforced by the IRGen static-instance emitter).  A
-      // `ReferenceWritableKeyPath` chain crosses at least one class
-      // boundary, so `keepAlive` will be set to the last class we
-      // dereferenced — that class owns the heap storage the returned
-      // pointer points into.
-      var origBase2 = origBase
-      let final: UnsafeMutablePointer<Value> =
-        unsafe withUnsafeMutableBytes(of: &origBase2) { baseBytes in
-          var p = unsafe UnsafeRawPointer(baseBytes.baseAddress
-              ._unsafelyUnwrappedUnchecked)
-          while true {
-            let (rawComponent, optNextType) = unsafe buffer.next()
-            switch unsafe rawComponent.value {
-            case .struct(let offset):
-              unsafe p = unsafe p.advanced(by: offset)
-            case .class(let offset):
-              let obj = unsafe p.load(as: AnyObject.self)
-              keepAlive = obj
-              unsafe p = unsafe UnsafeRawPointer(
-                Builtin.bridgeToRawPointer(obj)).advanced(by: offset)
-            default:
-              fatalError(
-                "Embedded Swift RWK chain must be stored struct/tuple/class")
-            }
-            if optNextType == nil { break }
+      // Multi-component walker for ReferenceWritableKeyPath chains.
+      // These always cross at least one class boundary or use a
+      // nonmutating setter at some point.  Components handled:
+      //   * `.struct` / `.class` — pointer arithmetic, as in the read walker
+      //   * `.mutatingGetSet` — heap-allocate scratch, install a
+      //     `_EmbeddedMutatingWritebackBuffer` in the keepAlive chain
+      //   * `.nonmutatingGetSet` — same but with the nonmutating writeback
+      //
+      // The walker's returned pointer must remain stable after the
+      // walker's stack frame dies.  For any mutating writeback whose
+      // `base` points into the value passed as `origBase`, we need to
+      // preserve that storage: heap-allocate a root copy and chain a
+      // `_EmbeddedRootHolder` onto `keepAlive` so it stays alive as long
+      // as any inner writeback references it.  This only matters when
+      // the *first* computed step is mutating and reads from the root;
+      // once we cross a class boundary, subsequent writebacks can point
+      // into the class's heap storage which is already retained via
+      // `keepAlive`.
+      //
+      // The root value type is `Root`.  We only bother heap-copying the
+      // root when we actually need a mutating writeback on it — but for
+      // simplicity always copy it (Root is usually small; the cost is
+      // one alloc/dealloc per mutation).
+      let rootMeta = unsafe unsafeBitCast(Root.self,
+          to: UnsafeRawPointer.self)
+      let rootSize = Int(unsafe _swift_embedded_metadata_get_size(rootMeta))
+      let rootAlignMask = Int(unsafe _swift_embedded_metadata_get_align_mask(
+          rootMeta))
+      let rootScratch = unsafe swift_slowAlloc(rootSize, rootAlignMask)!
+      unsafe rootScratch.assumingMemoryBound(to: Root.self).initialize(
+          to: origBase)
+      keepAlive = unsafe _EmbeddedRootHolder(
+        previous: keepAlive, storage: rootScratch,
+        metadata: rootMeta, size: rootSize, alignMask: rootAlignMask)
+      var p: UnsafeRawPointer = unsafe UnsafeRawPointer(rootScratch)
+
+      while true {
+        let (rawComponent, optNextType) = unsafe buffer.next()
+        switch unsafe rawComponent.value {
+        case .struct(let offset):
+          unsafe p = unsafe p.advanced(by: offset)
+        case .class(let offset):
+          let obj = unsafe p.load(as: AnyObject.self)
+          keepAlive = obj
+          unsafe p = unsafe UnsafeRawPointer(
+            Builtin.bridgeToRawPointer(obj)).advanced(by: offset)
+        case .mutatingGetSet(id: _, accessors: let accessors,
+                             argument: let argument):
+          let metadata: UnsafeRawPointer
+          if let nextType = optNextType {
+            unsafe metadata = unsafe unsafeBitCast(nextType,
+                to: UnsafeRawPointer.self)
+          } else {
+            unsafe metadata = unsafe unsafeBitCast(Value.self,
+                to: UnsafeRawPointer.self)
           }
-          let typed = unsafe p.assumingMemoryBound(to: Value.self)
-          return unsafe UnsafeMutablePointer(mutating: typed)
+          unsafe p = unsafe _embeddedInstallMutatingWriteback(
+            parentPtr: UnsafeMutableRawPointer(mutating: p),
+            accessors: accessors, argument: argument,
+            valueMetadata: metadata, keepAlive: &keepAlive)
+        case .nonmutatingGetSet(id: _, accessors: let accessors,
+                                argument: let argument):
+          let metadata: UnsafeRawPointer
+          if let nextType = optNextType {
+            unsafe metadata = unsafe unsafeBitCast(nextType,
+                to: UnsafeRawPointer.self)
+          } else {
+            unsafe metadata = unsafe unsafeBitCast(Value.self,
+                to: UnsafeRawPointer.self)
+          }
+          unsafe p = unsafe _embeddedInstallNonmutatingWriteback(
+            basePtr: UnsafeMutableRawPointer(mutating: p),
+            accessors: accessors, argument: argument,
+            valueMetadata: metadata, keepAlive: &keepAlive)
+        default:
+          fatalError(
+            "Embedded Swift RWK chain component kind not supported")
         }
-      return unsafe final
+        if optNextType == nil { break }
+      }
+      let typed = unsafe p.assumingMemoryBound(to: Value.self)
+      return unsafe UnsafeMutablePointer(mutating: typed)
 #else
       // 16 is the max alignment allowed on practically every platform we deploy
       // to.
@@ -913,6 +1047,49 @@ internal struct ComputedAccessorsPtr {
       as: Getter.self,
       discriminator: ComputedAccessorsPtr.getterPtrAuthKey)
   }
+
+#if hasFeature(Embedded)
+  /// Authenticate the getter pointer (which is stored address-discriminated
+  /// with `KeyPathGetter`) and re-sign it with a plain IA / zero
+  /// discriminator, matching what a C `SWIFT_CC(swift)` function-pointer
+  /// call site (in `_swift_embedded_kp_invokeGetter`) expects.  On
+  /// non-ptrauth targets this is a no-op.  Used by the embedded
+  /// multi-component read walker, which can't express the getter's
+  /// generic `(CurValue, NewValue)` types statically and calls it via a
+  /// type-erased C shim instead.
+  internal var getterRaw: UnsafeRawPointer {
+    let signedAddr = unsafe getterPtr
+    let signed = unsafe signedAddr.load(as: UnsafeRawPointer.self)
+    let srcDiscr = unsafe _PtrAuth.blend(pointer: signedAddr,
+      discriminator: ComputedAccessorsPtr.getterPtrAuthKey)
+    return unsafe _PtrAuth.authenticateAndResign(
+      pointer: signed,
+      oldKey: .processIndependentCode,
+      oldDiscriminator: srcDiscr,
+      newKey: .processIndependentCode,
+      newDiscriminator: 0)
+  }
+
+  /// Companion to `getterRaw` for the setter slot.  `mutating` selects
+  /// between the two ptr-auth discriminators (`KeyPathMutatingSetter`
+  /// vs `KeyPathNonmutatingSetter`) IRGen uses when signing the setter
+  /// slot in a `settable_property` KP component.
+  internal func setterRaw(mutating: Bool) -> UnsafeRawPointer {
+    let signedAddr = unsafe setterPtr
+    let signed = unsafe signedAddr.load(as: UnsafeRawPointer.self)
+    let key: UInt64 = mutating
+      ? ComputedAccessorsPtr.mutatingSetterPtrAuthKey
+      : ComputedAccessorsPtr.nonmutatingSetterPtrAuthKey
+    let srcDiscr = unsafe _PtrAuth.blend(pointer: signedAddr,
+      discriminator: key)
+    return unsafe _PtrAuth.authenticateAndResign(
+      pointer: signed,
+      oldKey: .processIndependentCode,
+      oldDiscriminator: srcDiscr,
+      newKey: .processIndependentCode,
+      newDiscriminator: 0)
+  }
+#endif
 
   internal func nonmutatingSetter<CurValue, NewValue>()
       -> NonmutatingSetter<CurValue, NewValue> {
@@ -1272,6 +1449,226 @@ internal final class NonmutatingWritebackBuffer<CurValue, NewValue> {
     unsafe self.value = value
   }
 }
+
+#if hasFeature(Embedded)
+// Writeback machinery for the embedded multi-component walker when
+// invoked on a WritableKeyPath / ReferenceWritableKeyPath chain that has
+// a settable computed intermediate.  Since the walker doesn't know the
+// intermediate type statically, it stashes state in one of these type-
+// erased classes and hands the caller a pointer into a heap-allocated
+// scratch buffer.  The writeback fires from the class's `deinit` — the
+// caller keeps the returned `owner: AnyObject?` alive until it's done
+// mutating, at which point ARC destroys the writeback in LIFO order
+// (chained via `previous`) and each `deinit` propagates the mutation up
+// one step.
+//
+// See the non-embedded `MutatingWritebackBuffer` / `NonmutatingWritebackBuffer`
+// for the typed equivalent — the shape is the same but the base pointer
+// / value slot are erased to `UnsafeMutableRawPointer`s and setter
+// dispatch goes through `_swift_embedded_kp_invokeSetter`.
+
+@unsafe
+internal final class _EmbeddedMutatingWritebackBuffer {
+  internal let previous: AnyObject?
+  internal let base: UnsafeMutableRawPointer          // @inout CurValue
+  internal let setter: UnsafeRawPointer               // authenticated raw fn
+  internal let argument: UnsafeRawPointer
+  internal let argumentSize: Int
+  internal let scratch: UnsafeMutableRawPointer       // NewValue storage
+  internal let valueMetadata: UnsafeRawPointer
+  internal let scratchSize: Int
+  internal let scratchAlignMask: Int
+
+  internal init(previous: AnyObject?,
+                base: UnsafeMutableRawPointer,
+                setter: UnsafeRawPointer,
+                argument: UnsafeRawPointer,
+                argumentSize: Int,
+                scratch: UnsafeMutableRawPointer,
+                valueMetadata: UnsafeRawPointer,
+                scratchSize: Int,
+                scratchAlignMask: Int) {
+    unsafe self.previous = previous
+    unsafe self.base = unsafe base
+    unsafe self.setter = unsafe setter
+    unsafe self.argument = unsafe argument
+    unsafe self.argumentSize = argumentSize
+    unsafe self.scratch = unsafe scratch
+    unsafe self.valueMetadata = unsafe valueMetadata
+    unsafe self.scratchSize = scratchSize
+    unsafe self.scratchAlignMask = scratchAlignMask
+  }
+
+  deinit {
+    // Fire the setter first (moves the mutated value from `scratch`
+    // into `base`).  The setter reads `scratch` by @in_guaranteed —
+    // ownership stays with us — so we still need to destroy the
+    // scratch's contents afterward.
+    unsafe _swift_embedded_kp_invokeSetter(
+      UnsafeMutableRawPointer(mutating: setter),
+      scratch, base, argument, argumentSize)
+    unsafe _swift_embedded_metadata_destroy(valueMetadata, scratch)
+    unsafe swift_slowDealloc(scratch, scratchSize, scratchAlignMask)
+  }
+}
+
+@unsafe
+internal final class _EmbeddedNonmutatingWritebackBuffer {
+  internal let previous: AnyObject?
+  // Non-mutating setter takes `@in_guaranteed CurValue`.  We keep the
+  // base's storage alive via its owning class (either `baseClass` for a
+  // class-typed base, or via the enclosing writeback's `previous` chain
+  // if it's a struct inside another writeback's scratch).  `basePtr`
+  // then points into that storage.
+  internal let base: UnsafeMutableRawPointer          // @in_guaranteed CurValue
+  internal let setter: UnsafeRawPointer
+  internal let argument: UnsafeRawPointer
+  internal let argumentSize: Int
+  internal let scratch: UnsafeMutableRawPointer       // NewValue storage
+  internal let valueMetadata: UnsafeRawPointer
+  internal let scratchSize: Int
+  internal let scratchAlignMask: Int
+
+  internal init(previous: AnyObject?,
+                base: UnsafeMutableRawPointer,
+                setter: UnsafeRawPointer,
+                argument: UnsafeRawPointer,
+                argumentSize: Int,
+                scratch: UnsafeMutableRawPointer,
+                valueMetadata: UnsafeRawPointer,
+                scratchSize: Int,
+                scratchAlignMask: Int) {
+    unsafe self.previous = previous
+    unsafe self.base = unsafe base
+    unsafe self.setter = unsafe setter
+    unsafe self.argument = unsafe argument
+    unsafe self.argumentSize = argumentSize
+    unsafe self.scratch = unsafe scratch
+    unsafe self.valueMetadata = unsafe valueMetadata
+    unsafe self.scratchSize = scratchSize
+    unsafe self.scratchAlignMask = scratchAlignMask
+  }
+
+  deinit {
+    unsafe _swift_embedded_kp_invokeSetter(
+      UnsafeMutableRawPointer(mutating: setter),
+      scratch, base, argument, argumentSize)
+    unsafe _swift_embedded_metadata_destroy(valueMetadata, scratch)
+    unsafe swift_slowDealloc(scratch, scratchSize, scratchAlignMask)
+  }
+}
+
+/// Owns a heap-allocated copy of a KP's root value so that mid-chain
+/// writeback buffers can safely reference into it — `origBase` on the
+/// walker's stack frame would die once `_projectMutableAddress` returns.
+/// The root-holder is only used for `ReferenceWritableKeyPath` chains
+/// whose *first* component installs a writeback, which needs `parentPtr`
+/// pointing at stable storage for the setter's `@inout` or
+/// `@in_guaranteed` base.
+@unsafe
+internal final class _EmbeddedRootHolder {
+  internal let previous: AnyObject?
+  internal let storage: UnsafeMutableRawPointer
+  internal let metadata: UnsafeRawPointer
+  internal let size: Int
+  internal let alignMask: Int
+
+  internal init(previous: AnyObject?,
+                storage: UnsafeMutableRawPointer,
+                metadata: UnsafeRawPointer,
+                size: Int, alignMask: Int) {
+    unsafe self.previous = previous
+    unsafe self.storage = unsafe storage
+    unsafe self.metadata = unsafe metadata
+    unsafe self.size = size
+    unsafe self.alignMask = alignMask
+  }
+
+  deinit {
+    unsafe _swift_embedded_metadata_destroy(metadata, storage)
+    unsafe swift_slowDealloc(storage, size, alignMask)
+  }
+}
+
+/// Set up a mutating-computed writeback: heap-allocate scratch sized to
+/// the intermediate value type, call the getter to populate it, chain a
+/// new `_EmbeddedMutatingWritebackBuffer` onto `keepAlive`, and return
+/// a raw pointer to the scratch so the walker can continue past it.
+/// The mutations the caller performs through the returned pointer end
+/// up in the scratch; when the writeback's `deinit` fires (LIFO with
+/// the rest of the `keepAlive` chain), the setter propagates the
+/// mutation up into `parentPtr`.
+@inline(__always)
+internal func _embeddedInstallMutatingWriteback(
+  parentPtr: UnsafeMutableRawPointer,
+  accessors: ComputedAccessorsPtr,
+  argument: KeyPathComponent.ArgumentRef?,
+  valueMetadata: UnsafeRawPointer,
+  keepAlive: inout AnyObject?
+) -> UnsafeRawPointer {
+  let size = Int(unsafe _swift_embedded_metadata_get_size(valueMetadata))
+  let alignMask = Int(unsafe _swift_embedded_metadata_get_align_mask(
+      valueMetadata))
+  let scratch = unsafe swift_slowAlloc(size, alignMask)!
+  let argPtr = unsafe argument?.data.baseAddress ?? accessors._value
+  let argSize = unsafe argument?.data.count ?? 0
+  let getterRaw = unsafe accessors.getterRaw
+  let setterRaw = unsafe accessors.setterRaw(mutating: true)
+  unsafe _swift_embedded_kp_invokeGetter(
+    UnsafeMutableRawPointer(mutating: getterRaw),
+    scratch, parentPtr, argPtr, argSize)
+  let writeback = unsafe _EmbeddedMutatingWritebackBuffer(
+    previous: keepAlive,
+    base: parentPtr,
+    setter: setterRaw,
+    argument: argPtr,
+    argumentSize: argSize,
+    scratch: scratch,
+    valueMetadata: valueMetadata,
+    scratchSize: size,
+    scratchAlignMask: alignMask)
+  keepAlive = unsafe writeback
+  return unsafe UnsafeRawPointer(scratch)
+}
+
+/// Companion to `_embeddedInstallMutatingWriteback` for the
+/// nonmutating-setter case (class-typed base or `nonmutating set` on a
+/// struct).  The base is passed by `@in_guaranteed` at the setter's ABI
+/// level, so we hand the setter a pointer into a stable location for
+/// `base`.
+@inline(__always)
+internal func _embeddedInstallNonmutatingWriteback(
+  basePtr: UnsafeMutableRawPointer,
+  accessors: ComputedAccessorsPtr,
+  argument: KeyPathComponent.ArgumentRef?,
+  valueMetadata: UnsafeRawPointer,
+  keepAlive: inout AnyObject?
+) -> UnsafeRawPointer {
+  let size = Int(unsafe _swift_embedded_metadata_get_size(valueMetadata))
+  let alignMask = Int(unsafe _swift_embedded_metadata_get_align_mask(
+      valueMetadata))
+  let scratch = unsafe swift_slowAlloc(size, alignMask)!
+  let argPtr = unsafe argument?.data.baseAddress ?? accessors._value
+  let argSize = unsafe argument?.data.count ?? 0
+  let getterRaw = unsafe accessors.getterRaw
+  let setterRaw = unsafe accessors.setterRaw(mutating: false)
+  unsafe _swift_embedded_kp_invokeGetter(
+    UnsafeMutableRawPointer(mutating: getterRaw),
+    scratch, basePtr, argPtr, argSize)
+  let writeback = unsafe _EmbeddedNonmutatingWritebackBuffer(
+    previous: keepAlive,
+    base: basePtr,
+    setter: setterRaw,
+    argument: argPtr,
+    argumentSize: argSize,
+    scratch: scratch,
+    valueMetadata: valueMetadata,
+    scratchSize: size,
+    scratchAlignMask: alignMask)
+  keepAlive = unsafe writeback
+  return unsafe UnsafeRawPointer(scratch)
+}
+#endif
 
 internal typealias KeyPathComputedArgumentLayoutFn = @convention(thin)
   (_ patternArguments: UnsafeRawPointer?) -> (size: Int, alignmentMask: Int)
