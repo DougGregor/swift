@@ -246,7 +246,7 @@ _swift_embedded_metadata_destroy(const void *metadata, void *value) {
 }
 
 // Calling-convention bridge for invoking a key-path accessor thunk from
-// the embedded runtime walker.  A key-path getter thunk has SIL type
+// the type-erased runtime walker.  A key-path getter thunk has SIL type
 // `@convention(keypath_accessor_getter) (@in_guaranteed T) -> @out T`,
 // which at the LLVM level lowers to
 // `void SWIFT_CC(swift)(sret out, in base, args ptr, args size)`.  From
@@ -261,20 +261,22 @@ _swift_embedded_metadata_destroy(const void *metadata, void *value) {
 // `arg` / `argSize` correspond to the KP thunk's trailing "index
 // argument" pair — always `(NULL, 0)` for the components the embedded
 // static-instance emitter produces (no captured subscript indices).
+// Used from both embedded and non-embedded stdlibs to invoke KP getter
+// thunks without knowing `CurValue` / `NewValue` at the call site.
 static inline void
-_swift_embedded_kp_invokeGetter(void *_Nonnull fn,
-                                void *_Nonnull out,
-                                const void *_Nonnull base,
-                                const void *_Nullable arg,
-                                __swift_size_t argSize) {
+_swift_kp_invokeGetter(void *_Nonnull fn,
+                       void *_Nonnull out,
+                       const void *_Nonnull base,
+                       const void *_Nullable arg,
+                       __swift_size_t argSize) {
   typedef void SWIFT_CC_swift (*Getter)(void *SWIFT_INDIRECT_RESULT,
                                         const void *, const void *,
                                         __swift_size_t);
   ((Getter)fn)(out, base, arg, argSize);
 }
 
-// Companion to `_swift_embedded_kp_invokeGetter` for the setter side of
-// a KP writeback.  A KP setter thunk has SIL type
+// Companion to `_swift_kp_invokeGetter` for the setter side of a KP
+// writeback.  A KP setter thunk has SIL type
 // `@convention(keypath_accessor_setter) (@in_guaranteed NewValue,
 //                                        @{in_guaranteed|inout} CurValue) -> ()`,
 // which at the LLVM level lowers to
@@ -287,11 +289,11 @@ _swift_embedded_kp_invokeGetter(void *_Nonnull fn,
 // register assignment (x0-x3 / rdi-rcx) matches swiftcc for four
 // pointer/integer args with no return.
 static inline void
-_swift_embedded_kp_invokeSetter(void *_Nonnull fn,
-                                const void *_Nonnull value,
-                                void *_Nonnull base,
-                                const void *_Nullable arg,
-                                __swift_size_t argSize) {
+_swift_kp_invokeSetter(void *_Nonnull fn,
+                       const void *_Nonnull value,
+                       void *_Nonnull base,
+                       const void *_Nullable arg,
+                       __swift_size_t argSize) {
   typedef void SWIFT_CC_swift (*Setter)(const void *, void *,
                                         const void *, __swift_size_t);
   ((Setter)fn)(value, base, arg, argSize);
