@@ -562,9 +562,16 @@ extension ASTGenVisitor {
     let atLoc = self.generateSourceLoc(node.atSign)
     let range = self.generateAttrSourceRange(node)
 
-    let platformVersions = self.generate(platformVersionList: args.platforms)
+    let platformVersions = self.generate(
+      platformVersionList: args.platforms,
+      attrName: "@backDeployed"
+    )
+    if platformVersions.needsPlatformVersionDiagnostic {
+      self.diagnose(.attr_availability_need_platform_version("@backDeployed"), at: node.attributeName)
+      return []
+    }
     var result: [BridgedBackDeployedAttr] = []
-    for platformVersion in platformVersions {
+    for platformVersion in platformVersions.versions {
       let attr = BridgedBackDeployedAttr.createParsed(
         ctx,
         atLoc: atLoc,
@@ -1791,9 +1798,19 @@ extension ASTGenVisitor {
     let range = self.generateAttrSourceRange(node)
     let moduleNameInCtx = self.ctx.allocateCopy(string: moduleName)
 
-    let platformVersions = self.generate(platformVersionList: args.platforms)
+    let platformVersions = self.generate(
+      platformVersionList: args.platforms,
+      attrName: "@_originallyDefinedIn"
+    )
+    if platformVersions.needsPlatformVersionDiagnostic {
+      self.diagnose(
+        .attr_availability_need_platform_version("@_originallyDefinedIn"),
+        at: node.attributeName
+      )
+      return []
+    }
     var result: [BridgedOriginallyDefinedInAttr] = []
-    for platformVersion in platformVersions {
+    for platformVersion in platformVersions.versions {
       let attr = BridgedOriginallyDefinedInAttr.createParsed(
         ctx,
         atLoc: atLoc,
