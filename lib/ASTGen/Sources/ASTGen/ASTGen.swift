@@ -37,6 +37,10 @@ struct ASTGenVisitor {
 
   @Boxed private(set) var declContext: BridgedDeclContext
 
+  /// Whether a variable declaration should skip its `TopLevelCodeDecl` wrapper;
+  /// see `withTopLevelCodeSuppressed(_:)`.
+  @Boxed private(set) var suppressTopLevelCode: Bool = false
+
   let ctx: BridgedASTContext
 
   let configuredRegions: ConfiguredRegions
@@ -416,6 +420,22 @@ extension ASTGenVisitor {
     self.declContext = declContext
     defer {
       self.declContext = oldDeclContext
+    }
+    return body()
+  }
+
+  /// Run `body` with top-level-code wrapping suppressed.
+  ///
+  /// At module scope in script mode a variable declaration is normally wrapped
+  /// in a `TopLevelCodeDecl`, whose scope extends to the end of the file. A
+  /// declaration nested inside an attribute -- `@abi(var x = 1)` -- is not
+  /// top-level code, and wrapping it puts a scope spanning the rest of the file
+  /// inside the attribute's much smaller scope.
+  func withTopLevelCodeSuppressed<T>(_ body: () -> T) -> T {
+    let old = self.suppressTopLevelCode
+    self.suppressTopLevelCode = true
+    defer {
+      self.suppressTopLevelCode = old
     }
     return body()
   }

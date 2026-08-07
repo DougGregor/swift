@@ -421,27 +421,33 @@ extension ASTGenVisitor {
       return nil
     }
 
-    let abiDecl: BridgedDecl?
-    switch arg.provider {
-    case .associatedType(let assocTyDecl):
-      abiDecl = self.generate(associatedTypeDecl: assocTyDecl)?.asDecl
-    case .deinitializer(let deinitDecl):
-      abiDecl = self.generate(deinitializerDecl: deinitDecl).asDecl
-    case .enumCase(let caseDecl):
-      abiDecl = self.generate(enumCaseDecl: caseDecl).asDecl
-    case .function(let funcDecl):
-      abiDecl = self.generate(functionDecl: funcDecl)?.asDecl
-    case .initializer(let initDecl):
-      abiDecl = self.generate(initializerDecl: initDecl).asDecl
-    case .`subscript`(let subscriptDecl):
-      abiDecl = self.generate(subscriptDecl: subscriptDecl).asDecl
-    case .typeAlias(let typealiasDecl):
-      abiDecl = self.generate(typeAliasDecl: typealiasDecl)?.asDecl
-    case .variable(let varDecl):
-      abiDecl = self.generate(variableDecl: varDecl)
-    case .missing(_):
-      // This error condition will have been diagnosed in SwiftSyntax.
-      abiDecl = nil
+    // The declaration inside '@abi(...)' is not top-level code, even at module
+    // scope in script mode. Wrapping it in a TopLevelCodeDecl would give it a
+    // scope reaching to the end of the file, nested inside the attribute's much
+    // smaller one, which ASTScope rejects.
+    var abiDecl: BridgedDecl? = nil
+    self.withTopLevelCodeSuppressed {
+      switch arg.provider {
+      case .associatedType(let assocTyDecl):
+        abiDecl = self.generate(associatedTypeDecl: assocTyDecl)?.asDecl
+      case .deinitializer(let deinitDecl):
+        abiDecl = self.generate(deinitializerDecl: deinitDecl).asDecl
+      case .enumCase(let caseDecl):
+        abiDecl = self.generate(enumCaseDecl: caseDecl).asDecl
+      case .function(let funcDecl):
+        abiDecl = self.generate(functionDecl: funcDecl)?.asDecl
+      case .initializer(let initDecl):
+        abiDecl = self.generate(initializerDecl: initDecl).asDecl
+      case .`subscript`(let subscriptDecl):
+        abiDecl = self.generate(subscriptDecl: subscriptDecl).asDecl
+      case .typeAlias(let typealiasDecl):
+        abiDecl = self.generate(typeAliasDecl: typealiasDecl)?.asDecl
+      case .variable(let varDecl):
+        abiDecl = self.generate(variableDecl: varDecl)
+      case .missing(_):
+        // This error condition will have been diagnosed in SwiftSyntax.
+        abiDecl = nil
+      }
     }
 
     // TODO: Diagnose if `abiDecl` has a body/initial value/etc.

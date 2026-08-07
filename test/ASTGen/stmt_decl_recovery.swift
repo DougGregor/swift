@@ -137,3 +137,13 @@ struct EmptySubscriptParams {
     get { 0 }
   }
 }
+
+// A declaration nested in '@abi(...)' is not top-level code, even at module
+// scope in script mode. ASTGen wrapped it in a TopLevelCodeDecl, whose scope
+// reaches the end of the file, and ASTScope then found that scope nested inside
+// the attribute's much smaller one.
+@abi(var abiVar: Int)
+var abiVar: Int = 1
+
+@abi(func abiFunc())
+func abiFunc() {}
