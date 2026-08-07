@@ -691,3 +691,17 @@ BridgedParamDecl BridgedParameterList_get(BridgedParameterList cParameterList,
                                           size_t i) {
   return cParameterList.unbridged()->get(i);
 }
+
+//===----------------------------------------------------------------------===//
+// MARK: AccessorKind
+//===----------------------------------------------------------------------===//
+
+BridgedStringRef AccessorKind_nameForDiagnostic(swift::AccessorKind kind) {
+  // Returns a static string, so it outlives the call.
+  return getAccessorNameForDiagnostic(kind, /*article=*/false,
+                                      /*underscored=*/false);
+}
+
+bool AccessorKind_requiresCoroutineAccessorsFeature(swift::AccessorKind kind) {
+  return requiresFeatureCoroutineAccessors(kind);
+}
